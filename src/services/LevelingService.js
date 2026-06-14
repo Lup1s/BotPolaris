@@ -1,5 +1,4 @@
 import fs from 'fs/promises';
-import fsSync from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
 import { PermissionsBitField } from 'discord.js';
@@ -24,14 +23,21 @@ export class LevelingService {
     static async init(client) {
         try {
             const dbDir = path.dirname(this.dbPath);
-            if (!fsSync.existsSync(dbDir)) fsSync.mkdirSync(dbDir, { recursive: true });
+            
+            try {
+                await fs.access(dbDir);
+            } catch {
+                await fs.mkdir(dbDir, { recursive: true });
+            }
 
-            if (fsSync.existsSync(this.dbPath)) {
+            try {
                 const data = await fs.readFile(this.dbPath, 'utf8');
                 const parsed = JSON.parse(data);
                 for (const [userId, info] of Object.entries(parsed)) {
                     this.usersData.set(userId, info);
                 }
+            } catch (err) {
+                if (err.code !== 'ENOENT') throw err;
             }
             
             // Iniciar tracking de tempo em call
@@ -46,7 +52,10 @@ export class LevelingService {
     static async saveDb() {
         try {
             const data = Object.fromEntries(this.usersData);
-            await fs.writeFile(this.dbPath, JSON.stringify(data, null, 4), 'utf8');
+            // Escrita atômica: evita perda de dados em caso de crash
+            const tempPath = `${this.dbPath}.tmp`;
+            await fs.writeFile(tempPath, JSON.stringify(data, null, 4), 'utf8');
+            await fs.rename(tempPath, this.dbPath);
         } catch (error) {
             logger.error(`Erro ao salvar DB de XP: ${error.message}`);
         }

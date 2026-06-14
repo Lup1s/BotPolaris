@@ -5,7 +5,9 @@ export const validateEnv = () => {
     const requiredEnvVars = [
         'DISCORD_TOKEN',
         'CLIENT_ID',
-        'OWNER_ID'
+        'OWNER_ID',
+        'SUPABASE_URL',
+        'SUPABASE_ANON_KEY'
     ];
 
     const missingVars = requiredEnvVars.filter(envVar => !process.env[envVar]);

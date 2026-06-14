@@ -1,14 +1,44 @@
 {
     "329717463371481089": {
-        "xp": 60,
-        "level": 1,
+        "xp": 1355,
+        "level": 4,
         "lastMessage": 0,
-        "voiceTimeMinutes": 12
+        "voiceTimeMinutes": 271
     },
     "367795062374924289": {
-        "xp": 60,
+        "xp": 1355,
+        "level": 4,
+        "lastMessage": 0,
+        "voiceTimeMinutes": 271
+    },
+    "773968365013434408": {
+        "xp": 1195,
+        "level": 4,
+        "lastMessage": 0,
+        "voiceTimeMinutes": 239
+    },
+    "329291261825515521": {
+        "xp": 85,
         "level": 1,
         "lastMessage": 0,
-        "voiceTimeMinutes": 12
+        "voiceTimeMinutes": 17
+    },
+    "608406771345915904": {
+        "xp": 990,
+        "level": 4,
+        "lastMessage": 0,
+        "voiceTimeMinutes": 198
+    },
+    "472201643392237579": {
+        "xp": 450,
+        "level": 3,
+        "lastMessage": 0,
+        "voiceTimeMinutes": 90
+    },
+    "346621403761475585": {
+        "xp": 10,
+        "level": 1,
+        "lastMessage": 0,
+        "voiceTimeMinutes": 2
     }
 }
