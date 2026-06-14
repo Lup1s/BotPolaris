@@ -149,7 +149,8 @@ export class LevelingService {
                     role = await guild.roles.create({
                         name: rank.name,
                         color: 'Random',
-                        reason: 'Criação automática de patente militar.'
+                        reason: 'Criação automática de patente militar.',
+                        hoist: true
                     });
                 }
                 rank.roleId = role.id;

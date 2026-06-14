@@ -56,6 +56,7 @@ export class SystemMessageService {
                     name: 'Membro Verificado',
                     color: '#a6e3a1',
                     reason: 'Cargo para membros que aceitaram as regras',
+                    hoist: true,
                     permissions: [
                         PermissionsBitField.Flags.ViewChannel,
                         PermissionsBitField.Flags.SendMessages,
@@ -272,6 +273,7 @@ export class SystemMessageService {
                         name: 'Membro Verificado', 
                         color: '#a6e3a1', 
                         reason: 'Cargo de verificação automática',
+                        hoist: true,
                         permissions: [
                             PermissionsBitField.Flags.ViewChannel,
                             PermissionsBitField.Flags.SendMessages,
@@ -321,7 +323,7 @@ export class SystemMessageService {
                     // Procura o cargo no servidor, se não achar, o bot cria automaticamente!
                     let role = guild.roles.cache.find(r => r.name === roleName);
                     if (!role) {
-                        role = await guild.roles.create({ name: roleName, color: 'Random', reason: 'Sistema de Auto-Registro' });
+                        role = await guild.roles.create({ name: roleName, color: 'Random', reason: 'Sistema de Auto-Registro', hoist: true });
                     }
 
                     // Se o usuário selecionou essa opção, adicionamos o cargo
