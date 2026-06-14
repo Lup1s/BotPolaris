@@ -117,29 +117,53 @@ export class SystemMessageService {
         logger.info(`Setup de Comunidade concluído.`);
     }
 
+    // Função inteligente para ignorar emojis, espaços, traços e acentos
+    static cleanName(name) {
+        if (!name) return '';
+        return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
     static async getOrCreateCategory(guild, name) {
-        let category = guild.channels.cache.find(c => c.name === name && c.type === ChannelType.GuildCategory);
+        const targetClean = this.cleanName(name);
+        let category = guild.channels.cache.find(c => 
+            c.type === ChannelType.GuildCategory && 
+            this.cleanName(c.name) === targetClean
+        );
+        
         if (!category) {
             category = await guild.channels.create({ name: name, type: ChannelType.GuildCategory });
+        } else if (category.name !== name) {
+            // Se encontrou a categoria mas o nome está diferente, atualiza
+            await category.setName(name).catch(()=>{});
         }
         return category;
     }
 
     static async getOrCreateChannel(guild, def) {
-        let channel = guild.channels.cache.find(c => c.name === def.name && c.type === def.type && c.parentId === def.parent);
+        const targetClean = this.cleanName(def.name);
+        let channel = guild.channels.cache.find(c => 
+            c.type === def.type && 
+            this.cleanName(c.name) === targetClean
+        );
+        
         if (!channel) {
             const options = { 
                 name: def.name, 
                 type: def.type, 
                 parent: def.parent 
             };
-            if (def.type === ChannelType.GuildForum && def.availableTags) {
-                options.availableTags = def.availableTags;
-            }
-            if (def.permissionOverwrites) {
-                options.permissionOverwrites = def.permissionOverwrites;
-            }
+            if (def.type === ChannelType.GuildForum && def.availableTags) options.availableTags = def.availableTags;
+            if (def.permissionOverwrites) options.permissionOverwrites = def.permissionOverwrites;
+            
             channel = await guild.channels.create(options);
+        } else {
+            // Canal encontrado! Verifica se precisa corrigir nome, categoria ou permissões
+            const updates = {};
+            if (channel.name !== def.name) updates.name = def.name;
+            if (channel.parentId !== def.parent) updates.parent = def.parent;
+            
+            if (Object.keys(updates).length > 0) await channel.edit(updates).catch(()=>{});
+            if (def.permissionOverwrites) await channel.permissionOverwrites.set(def.permissionOverwrites).catch(()=>{});
         }
         return channel;
     }
