@@ -249,8 +249,8 @@ export class LevelingService {
             .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
             .addFields(
                 { name: '🎖️ Patente', value: `**${currentRank.name}** (Nvl ${data.level})`, inline: true },
-                { name: '� Prestígio', value: prestigeStars, inline: true },
-                { name: '� Posição', value: `#${rankPos > 0 ? rankPos : '?'} Geral`, inline: true },
+                { name: '⭐ Prestígio', value: prestigeStars, inline: true },
+                { name: '📊 Posição', value: `#${rankPos > 0 ? rankPos : '?'} Geral`, inline: true },
                 { name: '📈 Progresso', value: `\`[${'█'.repeat(Math.floor(percent/10))}${' '.repeat(10 - Math.floor(percent/10))}]\` ${percent}%`, inline: false },
                 { name: '🎤 Tempo em Voice', value: `${data.voiceTimeMinutes || 0} min`, inline: true },
                 { name: '🤝 Liderança', value: repStars, inline: true },

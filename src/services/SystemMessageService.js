@@ -671,7 +671,7 @@ export class SystemMessageService {
         }
 
         // Lógica do Sistema de MIX (Partidas Customizadas e Sorteio)
-        if (interaction.isButton() && interaction.customId.startsWith('mix_')) {
+        if (interaction.isButton() && ['mix_join', 'mix_leave'].includes(interaction.customId)) {
             const embed = interaction.message.embeds[0];
             if (!embed || !embed.footer?.text || !embed.footer.text.includes('Status: Aguardando jogadores...')) return;
 
@@ -709,7 +709,12 @@ export class SystemMessageService {
                     )
                     .setFooter({ text: 'Status: Mix Iniciado!' });
 
-                await interaction.message.edit({ embeds: [newEmbed], components: [] });
+                const rowWin = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('mix_win_a').setLabel('Vitória Time A').setStyle(ButtonStyle.Primary).setEmoji('🔵'),
+                    new ButtonBuilder().setCustomId('mix_win_b').setLabel('Vitória Time B').setStyle(ButtonStyle.Danger).setEmoji('🔴')
+                );
+
+                await interaction.message.edit({ embeds: [newEmbed], components: [rowWin] });
 
                 // Auto-Move: Puxa os jogadores pras calls!
                 try {
@@ -731,8 +736,8 @@ export class SystemMessageService {
                         }
                     };
 
-                    await movePlayers(mentionA, canalA);
-                    await movePlayers(mentionB, canalB);
+                    await movePlayers(timeA, canalA);
+                    await movePlayers(timeB, canalB);
 
                 } catch (err) {
                     logger.error(`Erro ao mover membros no Mix: ${err.message}`);
@@ -752,8 +757,8 @@ export class SystemMessageService {
             if (!embed) return;
             
             const isBlueWin = interaction.customId === 'mix_win_a';
-            const fieldA = embed.fields.find(f => f.name.includes('Azul')).value.split('\n');
-            const fieldB = embed.fields.find(f => f.name.includes('Vermelho')).value.split('\n');
+            const fieldA = embed.fields.find(f => f.name.includes('Time A')).value.split('\n');
+            const fieldB = embed.fields.find(f => f.name.includes('Time B')).value.split('\n');
             
             // Garante que só quem jogou pode votar o encerramento
             const allPlayers = [...fieldA, ...fieldB];
@@ -767,10 +772,10 @@ export class SystemMessageService {
                     const id = mention.replace(/\D/g, '');
                     const data = LevelingService.getUserData(id);
                     if (isWinner) {
-                        data.mixWins++;
+                        data.mixWins = (data.mixWins || 0) + 1;
                         data.xp += 150; // Bônus gigante de vitória
                     } else {
-                        data.mixLosses++;
+                        data.mixLosses = (data.mixLosses || 0) + 1;
                         data.xp += 20; // Bônus de consolação
                     }
                 }
@@ -782,14 +787,14 @@ export class SystemMessageService {
 
             const newEmbed = EmbedBuilder.from(embed)
                 .setTitle('🏆 Mix Encerrado')
-                .setDescription(`Partida finalizada! O **Time ${isBlueWin ? 'Azul' : 'Vermelho'}** venceu!\n\n*(Estatísticas, MMR e Experiência Militar foram creditados às contas dos jogadores)*.`)
+                .setDescription(`Partida finalizada! O **Time ${isBlueWin ? 'A' : 'B'}** venceu!\n\n*(Estatísticas, MMR e Experiência Militar foram creditados às contas dos jogadores)*.`)
                 .setColor(isBlueWin ? '#00a8ff' : '#e74c3c');
                 
             await interaction.update({ embeds: [newEmbed], components: [] });
             
             // Limpa as calls
             const guild = interaction.guild;
-            guild.channels.cache.filter(c => ['🔵 Time Azul (Mix)', '🔴 Time Vermelho (Mix)'].includes(c.name)).forEach(c => c.delete().catch(()=>{}));
+            guild.channels.cache.filter(c => ['🔵 Time A (Mix)', '🔴 Time B (Mix)'].includes(c.name)).forEach(c => c.delete().catch(()=>{}));
         }
     }
 }
