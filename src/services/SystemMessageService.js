@@ -172,29 +172,55 @@ export class SystemMessageService {
         await LevelingService.updateMilitaryRole(member, 1);
 
         // 2. Enviar mensagem de boas vindas
-        const welcomeChannelId = this.config.channels.boas_vindas;
-        if (welcomeChannelId) {
-            const channel = guild.channels.cache.get(welcomeChannelId);
-            if (channel) {
-                const embed = new EmbedBuilder()
-                    .setColor('#00ff00')
-                    .setTitle('🌌 Novo Operador Detectado')
-                    .setDescription(`Bem-vindo ao servidor, ${member.toString()}!\n\nParticipe das calls temporárias, evolua através das patentes militares e encontre novos companheiros para jogar no Fórum de Squads.\n\nBoa sorte, Recruta.`)
-                    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-                    .setTimestamp();
-                
-                await channel.send({ embeds: [embed] }).catch(()=>{});
-            }
+        let channel = this.config.channels.boas_vindas ? guild.channels.cache.get(this.config.channels.boas_vindas) : null;
+        
+        // Fallback: Se não achar pelo ID do config, procura pelo nome
+        if (!channel) channel = guild.channels.cache.find(c => ['boas-vindas', 'geral', 'chat-geral'].includes(c.name));
+
+        if (channel) {
+            const embed = new EmbedBuilder()
+                .setColor('#89b4fa') // Cor temática do bot
+                .setTitle(`🎉 Bem-vindo(a) à Base, ${member.user.username}!`)
+                .setDescription(`Olá, ${member.toString()}! Você acaba de se alistar como **🪖 Recruta** em nossa comunidade.\n\n💬 Lembre-se de ler as regras para liberar seu acesso e participe das calls de voz para ganhar XP!`)
+                .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
+                .setFooter({ text: `Agora somos ${guild.memberCount} membros!` })
+                .setTimestamp();
+            
+            await channel.send({ embeds: [embed] }).catch(()=>{});
         }
 
         // 3. DM
-        member.send(`Bem-vindo ao servidor **${guild.name}**! Não se esqueça de ler as regras no canal de Informações.`).catch(()=>{});
+        member.send(`Bem-vindo(a) ao servidor **${guild.name}**! 🚀\nNão se esqueça de ir no canal de Regras e clicar no botão "Concordo" para liberar seu acesso a todos os chats!`).catch(()=>{});
+        logger.info(`Novo membro alistado: ${member.user.tag}. Auto-role [Recruta] aplicado.`);
     }
 
     static async handleInteraction(interaction) {
         if (interaction.isButton() && interaction.customId === 'accept_rules') {
-            await interaction.reply({ content: '✅ Regras aceitas! Acesso liberado.', flags: 64 });
-            // Aqui poderíamos dar um cargo de "Verificado" caso exista no servidor
+            await interaction.deferReply({ flags: 64 });
+            const member = interaction.member;
+            const guild = interaction.guild;
+
+            try {
+                let role = guild.roles.cache.find(r => r.name === 'Membro Verificado' || r.name === 'Membro');
+                if (!role) {
+                    role = await guild.roles.create({ 
+                        name: 'Membro Verificado', 
+                        color: '#a6e3a1', 
+                        reason: 'Cargo de verificação automática' 
+                    });
+                }
+                
+                if (!member.roles.cache.has(role.id)) {
+                    await member.roles.add(role);
+                    await interaction.editReply({ content: '✅ Regras aceitas! O cargo **Membro Verificado** foi adicionado e seu acesso foi liberado.' });
+                    logger.info(`Usuário ${member.user.tag} aceitou as regras e foi verificado.`);
+                } else {
+                    await interaction.editReply({ content: '✅ Você já aceitou as regras e possui o acesso liberado!' });
+                }
+            } catch (error) {
+                logger.error(`Erro ao dar cargo de verificação: ${error.message}`);
+                await interaction.editReply({ content: '❌ Ocorreu um erro ao tentar liberar seu acesso. Por favor, contate a Staff.' });
+            }
         }
 
         // Lógica para o menu de registro de jogos
