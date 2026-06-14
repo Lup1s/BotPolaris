@@ -6,13 +6,15 @@ export class StatsService {
         try {
             await guild.members.fetch();
             
-            const totalMembers = guild.memberCount;
-            const onlineMembers = guild.members.cache.filter(m => ['online', 'idle', 'dnd'].includes(m.presence?.status)).size;
+            // Filtra apenas membros reais (ignora bots)
+            const realMembers = guild.members.cache.filter(m => !m.user.bot);
+            const totalMembers = realMembers.size;
+            const onlineMembers = realMembers.filter(m => ['online', 'idle', 'dnd'].includes(m.presence?.status)).size;
             
             let inVoice = 0;
             let playingGames = 0;
 
-            for (const member of guild.members.cache.values()) {
+            for (const member of realMembers.values()) {
                 if (member.voice.channel) inVoice++;
                 if (member.presence?.activities.some(a => a.type === 0)) playingGames++; // type 0 = Playing
             }
