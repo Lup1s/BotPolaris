@@ -11,11 +11,16 @@ if (!fsSync.existsSync(logDir)) {
 class Logger {
     constructor() {
         this.logFile = path.join(logDir, `${new Date().toISOString().split('T')[0]}.log`);
+        this.recentLogs = [];
     }
 
     async _write(level, message) {
         const timestamp = new Date().toISOString();
         const logEntry = `[${timestamp}] [${level.toUpperCase()}] ${message}\n`;
+
+        // Mantém os últimos 100 logs na memória para o painel web
+        this.recentLogs.push(logEntry.trim());
+        if (this.recentLogs.length > 100) this.recentLogs.shift();
 
         // Log no console
         if (level === 'error') {

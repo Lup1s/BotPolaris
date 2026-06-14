@@ -1,33 +1,23 @@
-import fs from 'fs/promises';
-import fsSync from 'fs';
-import path from 'path';
+import { supabase } from '../database/supabase.js';
 import { ChannelType, PermissionsBitField } from 'discord.js';
 import { logger } from '../utils/logger.js';
 
 export class TempVoiceService {
-    static dbPath = path.resolve('src', 'database', 'temp_channels.json');
     static activeChannels = new Map();
     static createChannelNames = ['➕ Criar Call', 'Criar Call', '➕ criar call', 'criar call'];
 
     static async init(client) {
         try {
-            // Garantir que a pasta database existe
-            const dbDir = path.dirname(this.dbPath);
-            if (!fsSync.existsSync(dbDir)) {
-                fsSync.mkdirSync(dbDir, { recursive: true });
-            }
+            const { data, error } = await supabase.from('temp_channels').select('*');
+            if (error) throw error;
 
-            if (fsSync.existsSync(this.dbPath)) {
-                const data = await fs.readFile(this.dbPath, 'utf8');
-                const parsed = JSON.parse(data);
-                for (const [channelId, ownerId] of Object.entries(parsed)) {
-                    this.activeChannels.set(channelId, ownerId);
+            if (data) {
+                for (const row of data) {
+                    this.activeChannels.set(row.channel_id, row.owner_id);
                 }
-            } else {
-                await this.saveDb();
             }
 
-            logger.info(`TempVoiceService iniciado. ${this.activeChannels.size} salas temporárias ativas no registro.`);
+            logger.info(`TempVoiceService iniciado. ${this.activeChannels.size} salas temporárias ativas carregadas do Supabase.`);
             
             // Limpeza de órfãos caso o bot tenha ficado offline
             this.cleanupOrphanedChannels(client);
@@ -38,10 +28,17 @@ export class TempVoiceService {
 
     static async saveDb() {
         try {
-            const data = Object.fromEntries(this.activeChannels);
-            await fs.writeFile(this.dbPath, JSON.stringify(data, null, 4), 'utf8');
+            if (this.activeChannels.size === 0) return;
+            
+            const records = Array.from(this.activeChannels.entries()).map(([channelId, ownerId]) => ({
+                channel_id: channelId,
+                owner_id: ownerId
+            }));
+
+            const { error } = await supabase.from('temp_channels').upsert(records);
+            if (error) throw error;
         } catch (error) {
-            logger.error(`Erro ao salvar DB de temp channels: ${error.message}`);
+            logger.error(`Erro ao salvar DB de temp channels no Supabase: ${error.message}`);
         }
     }
 
@@ -53,6 +50,7 @@ export class TempVoiceService {
                 if (!channel) {
                     // Canal não existe mais no Discord, limpa do banco
                     this.activeChannels.delete(channelId);
+                    await supabase.from('temp_channels').delete().eq('channel_id', channelId);
                     continue;
                 }
                 
@@ -60,6 +58,7 @@ export class TempVoiceService {
                 if (channel.type === ChannelType.GuildVoice && channel.members.size === 0) {
                     await channel.delete('Canal temporário vazio limpo na inicialização.');
                     this.activeChannels.delete(channelId);
+                    await supabase.from('temp_channels').delete().eq('channel_id', channelId);
                     logger.info(`Canal temporário órfão apagado: ${channelId}`);
                 }
             }
@@ -83,7 +82,7 @@ export class TempVoiceService {
             if (channel && channel.members.size === 0) {
                 try {
                     this.activeChannels.delete(oldState.channelId);
-                    await this.saveDb();
+                    await supabase.from('temp_channels').delete().eq('channel_id', oldState.channelId);
                     await channel.delete('Último usuário saiu do canal temporário.');
                     logger.info(`Sala temporária ${channel.name} deletada.`);
                 } catch (error) {

@@ -1,10 +1,8 @@
-import fs from 'fs/promises';
-import path from 'path';
+import { supabase } from '../database/supabase.js';
 import { logger } from '../utils/logger.js';
 import { PermissionsBitField } from 'discord.js';
 
 export class LevelingService {
-    static dbPath = path.resolve('src', 'database', 'users_xp.json');
     static usersData = new Map();
 
     static ranks = [
@@ -22,28 +20,25 @@ export class LevelingService {
 
     static async init(client) {
         try {
-            const dbDir = path.dirname(this.dbPath);
-            
-            try {
-                await fs.access(dbDir);
-            } catch {
-                await fs.mkdir(dbDir, { recursive: true });
-            }
+            // Busca os dados do Supabase
+            const { data, error } = await supabase.from('users_xp').select('*');
+            if (error) throw error;
 
-            try {
-                const data = await fs.readFile(this.dbPath, 'utf8');
-                const parsed = JSON.parse(data);
-                for (const [userId, info] of Object.entries(parsed)) {
-                    this.usersData.set(userId, info);
+            if (data) {
+                for (const row of data) {
+                    this.usersData.set(row.user_id, {
+                        xp: row.xp,
+                        level: row.level,
+                        lastMessage: Number(row.last_message),
+                        voiceTimeMinutes: row.voice_time_minutes
+                    });
                 }
-            } catch (err) {
-                if (err.code !== 'ENOENT') throw err;
             }
             
             // Iniciar tracking de tempo em call
             this.startVoiceTracking(client);
 
-            logger.info(`LevelingService iniciado com ${this.usersData.size} usuários registrados.`);
+            logger.info(`LevelingService iniciado com ${this.usersData.size} usuários carregados do Supabase.`);
         } catch (error) {
             logger.error(`Erro no LevelingService: ${error.message}`);
         }
@@ -51,13 +46,21 @@ export class LevelingService {
 
     static async saveDb() {
         try {
-            const data = Object.fromEntries(this.usersData);
-            // Escrita atômica: evita perda de dados em caso de crash
-            const tempPath = `${this.dbPath}.tmp`;
-            await fs.writeFile(tempPath, JSON.stringify(data, null, 4), 'utf8');
-            await fs.rename(tempPath, this.dbPath);
+            if (this.usersData.size === 0) return;
+
+            // Converte o Map para o formato que o Supabase espera (Snake Case)
+            const records = Array.from(this.usersData.entries()).map(([userId, info]) => ({
+                user_id: userId,
+                xp: info.xp,
+                level: info.level,
+                last_message: info.lastMessage,
+                voice_time_minutes: info.voiceTimeMinutes
+            }));
+
+            const { error } = await supabase.from('users_xp').upsert(records);
+            if (error) throw error;
         } catch (error) {
-            logger.error(`Erro ao salvar DB de XP: ${error.message}`);
+            logger.error(`Erro ao salvar DB de XP no Supabase: ${error.message}`);
         }
     }
 
