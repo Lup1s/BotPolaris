@@ -9,7 +9,7 @@ export class TicketService {
             await interaction.deferReply({ flags: 64 });
             
             const guild = interaction.guild;
-            const category = guild.channels.cache.find(c => c.name === '🛡️ SUPORTE' && c.type === ChannelType.GuildCategory);
+            const category = guild.channels.cache.find(c => c.name === '🎫 SUPORTE' && c.type === ChannelType.GuildCategory);
             
             const channelName = `ticket-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
 
@@ -44,9 +44,15 @@ export class TicketService {
 
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
-                        .setCustomId('close_ticket')
-                        .setLabel('🔒 Fechar Ticket')
+                        .setCustomId('ticket_close')
+                        .setLabel('🔒 Fechar')
                         .setStyle(ButtonStyle.Danger)
+                        .setEmoji('🔒'),
+                    new ButtonBuilder()
+                        .setCustomId('ticket_transcript')
+                        .setLabel('Salvar Log')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setEmoji('📝')
                 );
 
                 await ticketChannel.send({ content: `${interaction.user.toString()}`, embeds: [embed], components: [row] });
@@ -59,13 +65,41 @@ export class TicketService {
             }
         }
 
-        if (interaction.customId === 'close_ticket') {
+        if (interaction.customId === 'ticket_close') {
+            await interaction.reply({ 
+                content: 'Tem certeza que deseja fechar e deletar este ticket?', 
+                components: [
+                    new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('ticket_delete').setLabel('Confirmar Exclusão').setStyle(ButtonStyle.Danger)
+                    )
+                ]
+            });
+        }
+        
+        if (interaction.customId === 'ticket_delete') {
             const channel = interaction.channel;
             await interaction.reply({ content: '🔒 O ticket será fechado e apagado em 5 segundos...' });
             setTimeout(() => {
                 channel.delete('Ticket fechado pelo usuário.').catch(()=>{});
                 logger.info(`Ticket ${channel.name} fechado.`);
             }, 5000);
+        }
+        
+        if (interaction.customId === 'ticket_transcript') {
+            await interaction.deferReply({ flags: 64 });
+            try {
+                const messages = await interaction.channel.messages.fetch({ limit: 100 });
+                const lines = messages.reverse().map(m => `[${m.createdAt.toLocaleString('pt-BR')}] ${m.author.tag}: ${m.content || '[Anexo/Embed]'}`);
+                const transcript = lines.join('\n');
+                
+                const buffer = Buffer.from(transcript, 'utf8');
+                await interaction.editReply({ 
+                    content: '✅ Transcrição gerada.',
+                    files: [{ attachment: buffer, name: `transcript-${interaction.channel.name}.txt` }]
+                });
+            } catch (err) {
+                await interaction.editReply('❌ Erro ao gerar a transcrição.');
+            }
         }
     }
 }

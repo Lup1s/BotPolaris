@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, PermissionsBitField } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, PermissionsBitField, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { LevelingService } from './LevelingService.js';
 
 export class SystemMessageService {
@@ -73,8 +73,10 @@ export class SystemMessageService {
         const categories = {
             INFO: await this.getOrCreateCategory(guild, '📌 INFORMAÇÕES'),
             COMUNIDADE: await this.getOrCreateCategory(guild, '💬 COMUNIDADE'),
+            COMPETITIVO: await this.getOrCreateCategory(guild, '⚔️ COMPETITIVO'),
             SUPORTE: await this.getOrCreateCategory(guild, '🎫 SUPORTE'),
-            VOZ: await this.getOrCreateCategory(guild, '🔊 VÍDEO & VOZ')
+            VOZ: await this.getOrCreateCategory(guild, '🔊 VOZ'),
+            AMBIENTES: await this.getOrCreateCategory(guild, '📱 AMBIENTES PRIVADOS')
         };
 
         const channelsDef = [
@@ -88,21 +90,22 @@ export class SystemMessageService {
                     { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory], deny: [PermissionsBitField.Flags.SendMessages] }
                 ]
             },
-            { id: 'avisos', name: '📢・avisos', parent: categories.INFO.id, type: ChannelType.GuildText },
+            { id: 'anuncios', name: '📢・anuncios', parent: categories.INFO.id, type: ChannelType.GuildText },
+            { id: 'noticias', name: '📰・noticias', parent: categories.INFO.id, type: ChannelType.GuildText },
             
-            { id: 'geral', name: '💬・chat-geral', parent: categories.COMUNIDADE.id, type: ChannelType.GuildText },
-            { id: 'comandos', name: '🤖・comandos', parent: categories.COMUNIDADE.id, type: ChannelType.GuildText },
-            { id: 'squad', name: '🎮・encontre-seu-squad', parent: categories.COMUNIDADE.id, type: ChannelType.GuildForum,
-                availableTags: [
-                    { name: 'CS2', emoji: { name: '🔫' } },
-                    { name: 'Valorant', emoji: { name: '🔴' } },
-                    { name: 'LoL', emoji: { name: '⚔️' } }
-                ] 
-            },
+            { id: 'central', name: '🎮・central-do-jogador', parent: categories.COMUNIDADE.id, type: ChannelType.GuildText },
+            { id: 'geral', name: '💬・geral', parent: categories.COMUNIDADE.id, type: ChannelType.GuildText },
+            { id: 'midia', name: '📸・midia-e-clipes', parent: categories.COMUNIDADE.id, type: ChannelType.GuildText },
+            { id: 'squad', name: '🎯・procurar-squad', parent: categories.COMUNIDADE.id, type: ChannelType.GuildText },
             
-            { id: 'tickets', name: '🎫・tickets', parent: categories.SUPORTE.id, type: ChannelType.GuildText },
+            { id: 'mix_hub', name: '⚔️・mix-e-campeonatos', parent: categories.COMPETITIVO.id, type: ChannelType.GuildText },
+            { id: 'resultados', name: '🏅・resultados', parent: categories.COMPETITIVO.id, type: ChannelType.GuildText },
+            
+            { id: 'tickets', name: '🎫・suporte', parent: categories.SUPORTE.id, type: ChannelType.GuildText },
 
-            { id: 'criar_call', name: '➕ Criar Call', parent: categories.VOZ.id, type: ChannelType.GuildVoice }
+            { id: 'voz_geral', name: '💬 Geral', parent: categories.VOZ.id, type: ChannelType.GuildVoice },
+            { id: 'voz_lounge', name: '🎧 Lounge', parent: categories.VOZ.id, type: ChannelType.GuildVoice },
+            { id: 'criar_squad', name: '➕ Criar Squad', parent: categories.VOZ.id, type: ChannelType.GuildVoice }
         ];
 
         for (const def of channelsDef) {
@@ -112,10 +115,34 @@ export class SystemMessageService {
             // Enviar/Recriar mensagens estáticas
             if (def.id === 'regras') await this.ensureRulesMessage(channel);
             if (def.id === 'tickets') await this.ensureTicketMessage(channel);
+            if (def.id === 'squad') await this.ensureLfgMessage(channel);
+            if (def.id === 'central') await this.ensureCentralMessage(channel);
+            if (def.id === 'mix_hub') await this.ensureMixHubMessage(channel);
         }
 
         await this.saveDb();
         logger.info(`Setup de Comunidade concluído.`);
+    }
+
+    // Engine de Ambientes Dinâmicos (Workspaces)
+    static async createPrivateEnvironment(guild, member, envType, icon, setupCallback) {
+        const category = await this.getOrCreateCategory(guild, '📱 AMBIENTES PRIVADOS');
+        const channelName = `${icon}・${envType}-${member.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+        let channel = guild.channels.cache.find(c => c.name === channelName && c.parentId === category.id);
+        if (!channel) {
+            channel = await guild.channels.create({
+                name: channelName,
+                type: ChannelType.GuildText,
+                parent: category.id,
+                permissionOverwrites: [
+                    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+                ]
+            });
+            await setupCallback(channel);
+        }
+        return channel;
     }
 
     // Função inteligente para ignorar emojis, espaços, traços e acentos
@@ -229,6 +256,87 @@ export class SystemMessageService {
         const msg = await channel.send({ embeds: [embed], components: [row] });
         if (msg.pinnable) await msg.pin().catch(()=>{});
         this.config.messages.tickets = msg.id;
+        await this.saveDb();
+    }
+
+    static async ensureCentralMessage(channel) {
+        const msgId = this.config.messages.central;
+        if (msgId) {
+            try {
+                await channel.messages.fetch(msgId);
+                return;
+            } catch (e) { /* Apagada */ }
+        }
+
+        const embed = new EmbedBuilder()
+            .setColor('#89b4fa')
+            .setTitle('🎮 Painel do Jogador Polaris')
+            .setDescription('Bem-vindo à Central! Acesse todas as funcionalidades da sua conta utilizando os botões abaixo.')
+            .setImage('https://i.imgur.com/8QG3mQ9.png'); // Substituir por um banner da sua comunidade
+
+        const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('central_perfil').setLabel('Meu Perfil').setStyle(ButtonStyle.Primary).setEmoji('👤'),
+            new ButtonBuilder().setCustomId('central_ranking').setLabel('Ranking Geral').setStyle(ButtonStyle.Secondary).setEmoji('🏆'),
+            new ButtonBuilder().setCustomId('central_patentes').setLabel('Patentes').setStyle(ButtonStyle.Secondary).setEmoji('🎖️')
+        );
+        
+        const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('open_lfg_modal').setLabel('Procurar Squad').setStyle(ButtonStyle.Success).setEmoji('🎯')
+        );
+
+        const msg = await channel.send({ embeds: [embed], components: [row1, row2] });
+        this.config.messages.central = msg.id;
+        await this.saveDb();
+    }
+
+    static async ensureMixHubMessage(channel) {
+        const msgId = this.config.messages.mix_hub;
+        if (msgId) {
+            try {
+                await channel.messages.fetch(msgId);
+                return;
+            } catch (e) { /* Apagada */ }
+        }
+
+        const embed = new EmbedBuilder()
+            .setColor('#ffaa00')
+            .setTitle('⚔️ Central de Mix e Campeonatos')
+            .setDescription('Participe de partidas ranqueadas internas! Crie um Mix, aguarde os jogadores e o sistema montará as equipes equilibradas automaticamente.');
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('open_mix_modal').setLabel('Iniciar Mix').setStyle(ButtonStyle.Danger).setEmoji('⚔️')
+        );
+
+        const msg = await channel.send({ embeds: [embed], components: [row] });
+        if (msg.pinnable) await msg.pin().catch(()=>{});
+        this.config.messages.mix_hub = msg.id;
+        await this.saveDb();
+    }
+
+    static async ensureLfgMessage(channel) {
+        const msgId = this.config.messages.lfg;
+        if (msgId) {
+            try {
+                await channel.messages.fetch(msgId);
+                return;
+            } catch (e) { /* Apagada */ }
+        }
+
+        const embed = new EmbedBuilder()
+            .setColor('#f9e2af')
+            .setTitle('🎯 Central de Esquadrões (LFG)')
+            .setDescription('Quer jogar mas está sem time?\n\nClique no botão abaixo para abrir um formulário de recrutamento. Sua chamada será publicada aqui para outros membros entrarem.');
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('open_lfg_modal')
+                .setLabel('➕ Montar Esquadrão')
+                .setStyle(ButtonStyle.Success)
+        );
+
+        const msg = await channel.send({ embeds: [embed], components: [row] });
+        if (msg.pinnable) await msg.pin().catch(()=>{});
+        this.config.messages.lfg = msg.id;
         await this.saveDb();
     }
 
@@ -351,6 +459,337 @@ export class SystemMessageService {
                 logger.error(`Erro no auto-registro: ${error.message}`);
                 await interaction.editReply({ content: '❌ Houve um erro ao atualizar seus cargos. Tente novamente mais tarde.' });
             }
+        }
+
+        // Integrações Visuais da Central do Jogador
+        if (interaction.isButton()) {
+            if (interaction.customId === 'central_perfil') {
+                await interaction.deferReply({ flags: 64 });
+                const channel = await this.createPrivateEnvironment(interaction.guild, interaction.member, 'painel', '👤', async (ch) => {
+                    const embed = await LevelingService.generateProfileEmbed(interaction.member);
+                    const row = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('env_close').setLabel('Encerrar Sessão').setStyle(ButtonStyle.Danger).setEmoji('✖️')
+                    );
+                    await ch.send({ content: `Bem-vindo ao seu painel privado, ${interaction.user.toString()}.`, embeds: [embed], components: [row] });
+                });
+                await interaction.editReply(`✅ Ambiente carregado com sucesso. Acesse: ${channel.toString()}`);
+            } 
+            else if (interaction.customId === 'central_ranking') {
+                await interaction.deferReply({ flags: 64 });
+                const channel = await this.createPrivateEnvironment(interaction.guild, interaction.member, 'ranking', '🏆', async (ch) => {
+                    const embed = await LevelingService.generateRankingEmbed(interaction.guild);
+                    const row = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('env_close').setLabel('Encerrar Sessão').setStyle(ButtonStyle.Danger).setEmoji('✖️')
+                    );
+                    await ch.send({ content: interaction.user.toString(), embeds: [embed], components: [row] });
+                });
+                await interaction.editReply(`✅ Ambiente carregado. Acesse: ${channel.toString()}`);
+            }
+            else if (interaction.customId === 'central_patentes') {
+                await interaction.deferReply({ flags: 64 });
+                const channel = await this.createPrivateEnvironment(interaction.guild, interaction.member, 'patentes', '🎖️', async (ch) => {
+                    const embed = LevelingService.generateRanksEmbed();
+                    const row = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('env_close').setLabel('Encerrar Sessão').setStyle(ButtonStyle.Danger).setEmoji('✖️')
+                    );
+                    await ch.send({ content: interaction.user.toString(), embeds: [embed], components: [row] });
+                });
+                await interaction.editReply(`✅ Ambiente carregado. Acesse: ${channel.toString()}`);
+            }
+            else if (interaction.customId === 'env_close') {
+                await interaction.reply({ content: 'Limpando dados e excluindo ambiente...', flags: 64 });
+                setTimeout(() => interaction.channel.delete().catch(()=>{}), 2000);
+            }
+        }
+
+        // Lógica para abrir o Formulário Pop-up (Modal) de Esquadrão
+        if (interaction.isButton() && interaction.customId === 'open_lfg_modal') {
+            const modal = new ModalBuilder()
+                .setCustomId('lfg_modal_submit')
+                .setTitle('Montar Esquadrão');
+
+            const jogoInput = new TextInputBuilder()
+                .setCustomId('lfg_jogo')
+                .setLabel('Qual jogo? (Ex: CS2, Valorant, LoL)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(30);
+
+            const vagasInput = new TextInputBuilder()
+                .setCustomId('lfg_vagas')
+                .setLabel('Quantas vagas abertas? (Ex: 2)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(2);
+
+            const detalhesInput = new TextInputBuilder()
+                .setCustomId('lfg_detalhes')
+                .setLabel('Detalhes (Patente, modo, etc)')
+                .setStyle(TextInputStyle.Paragraph)
+                .setRequired(false)
+                .setMaxLength(200);
+
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(jogoInput),
+                new ActionRowBuilder().addComponents(vagasInput),
+                new ActionRowBuilder().addComponents(detalhesInput)
+            );
+
+            await interaction.showModal(modal);
+        }
+
+        // Lógica de quando o membro preenche e envia o Formulário
+        if (interaction.isModalSubmit() && interaction.customId === 'lfg_modal_submit') {
+            const jogo = interaction.fields.getTextInputValue('lfg_jogo');
+            const vagasStr = interaction.fields.getTextInputValue('lfg_vagas');
+            const detalhes = interaction.fields.getTextInputValue('lfg_detalhes');
+            
+            const vagas = parseInt(vagasStr);
+            if (isNaN(vagas) || vagas < 1 || vagas > 20) {
+                return interaction.reply({ content: '❌ O número de vagas deve ser um número válido entre 1 e 20.', flags: 64 });
+            }
+
+            const member = interaction.member;
+
+            // Tenta encontrar o cargo no servidor para marcar (pingar) a galera daquele jogo inteligentemente
+            let rolePing = '';
+            const jogoLower = jogo.toLowerCase();
+            const role = interaction.guild.roles.cache.find(r => 
+                r.name.toLowerCase() === `jogador de ${jogoLower}` || 
+                (r.name.toLowerCase().includes(jogoLower) && r.name.toLowerCase().includes('jogador'))
+            );
+            if (role) rolePing = role.toString();
+
+            const totalVagas = vagas + 1; // Vagas abertas + o Líder
+
+            const embed = new EmbedBuilder()
+                .setColor('#f9e2af') // Cor amarela pastel
+                .setTitle(`🎮 Procurando Esquadrão: ${jogo}`)
+                .setDescription(`O jogador ${member.toString()} está recrutando!`)
+                .addFields(
+                    { name: '👑 Líder', value: member.toString(), inline: true },
+                    { name: '👥 Vagas', value: `1/${totalVagas}`, inline: true },
+                    { name: '📝 Detalhes', value: detalhes || 'Nenhum detalhe adicional informado.', inline: false },
+                    { name: '✅ Confirmados (1)', value: member.toString(), inline: false },
+                    { name: '❓ Talvez (0)', value: 'Ninguém ainda', inline: false }
+                )
+                .setFooter({ text: `Vagas Totais: ${totalVagas} | Líder ID: ${member.id}` })
+                .setTimestamp();
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('lfg_join').setLabel('Eu vou!').setStyle(ButtonStyle.Success).setEmoji('✅'),
+                new ButtonBuilder().setCustomId('lfg_maybe').setLabel('Talvez').setStyle(ButtonStyle.Secondary).setEmoji('❓'),
+                new ButtonBuilder().setCustomId('lfg_leave').setLabel('Sair').setStyle(ButtonStyle.Danger).setEmoji('🚪')
+            );
+
+            await interaction.reply({ content: rolePing || null, embeds: [embed], components: [row] });
+        }
+
+        // Lógica do LFG (Procurando Esquadrão)
+        if (interaction.isButton() && interaction.customId.startsWith('lfg_')) {
+            const embed = interaction.message.embeds[0];
+            if (!embed) return;
+
+            const memberMention = interaction.user.toString();
+            const fields = embed.fields;
+            
+            const confirmField = fields.find(f => f.name.startsWith('✅ Confirmados'));
+            const maybeField = fields.find(f => f.name.startsWith('❓ Talvez'));
+            
+            // Busca a configuração escondida no rodapé da mensagem
+            const totalSlotsMatch = embed.footer.text.match(/Vagas Totais: (\d+)/);
+            const totalSlots = totalSlotsMatch ? parseInt(totalSlotsMatch[1]) : 5;
+            const leaderIdMatch = embed.footer.text.match(/Líder ID: (\d+)/);
+            const leaderId = leaderIdMatch ? leaderIdMatch[1] : '';
+
+            if (interaction.customId === 'lfg_leave' && interaction.user.id === leaderId) {
+                return interaction.reply({ content: '❌ Você é o líder do esquadrão! Se quiser cancelar o chamado, apague a mensagem.', flags: 64 });
+            }
+
+            let confirmList = confirmField.value === 'Ninguém ainda' ? [] : confirmField.value.split('\n');
+            let maybeList = maybeField.value === 'Ninguém ainda' ? [] : maybeField.value.split('\n');
+
+            // Remove o usuário das listas atuais (para evitar duplicações se ele trocar de opção)
+            confirmList = confirmList.filter(u => u !== memberMention);
+            maybeList = maybeList.filter(u => u !== memberMention);
+
+            if (interaction.customId === 'lfg_join') {
+                if (confirmList.length >= totalSlots) return interaction.reply({ content: '❌ As vagas para este esquadrão já estão preenchidas!', flags: 64 });
+                confirmList.push(memberMention);
+            } else if (interaction.customId === 'lfg_maybe') {
+                maybeList.push(memberMention);
+            }
+
+            const confirmStr = confirmList.length > 0 ? confirmList.join('\n') : 'Ninguém ainda';
+            const maybeStr = maybeList.length > 0 ? maybeList.join('\n') : 'Ninguém ainda';
+
+            const newEmbed = EmbedBuilder.from(embed).setFields(
+                embed.fields.map(f => {
+                    if (f.name.startsWith('✅ Confirmados')) return { name: `✅ Confirmados (${confirmList.length})`, value: confirmStr, inline: false };
+                    if (f.name.startsWith('❓ Talvez')) return { name: `❓ Talvez (${maybeList.length})`, value: maybeStr, inline: false };
+                    if (f.name === '👥 Vagas') return { name: '👥 Vagas', value: `${confirmList.length}/${totalSlots}`, inline: true };
+                    return f;
+                })
+            );
+
+            await interaction.update({ embeds: [newEmbed] });
+        }
+
+        // Formulário do Mix Competitivo
+        if (interaction.isButton() && interaction.customId === 'open_mix_modal') {
+            const modal = new ModalBuilder()
+                .setCustomId('mix_modal_submit')
+                .setTitle('Iniciar Mix Competitivo');
+
+            const jogoInput = new TextInputBuilder().setCustomId('mix_jogo').setLabel('Qual Jogo? (Ex: CS2, Valorant)').setStyle(TextInputStyle.Short).setRequired(true);
+            const vagasInput = new TextInputBuilder().setCustomId('mix_vagas').setLabel('Vagas Totais (Ex: 10)').setStyle(TextInputStyle.Short).setRequired(true);
+            
+            modal.addComponents(new ActionRowBuilder().addComponents(jogoInput), new ActionRowBuilder().addComponents(vagasInput));
+            await interaction.showModal(modal);
+        }
+
+        if (interaction.isModalSubmit() && interaction.customId === 'mix_modal_submit') {
+            const jogo = interaction.fields.getTextInputValue('mix_jogo');
+            const tamanho = parseInt(interaction.fields.getTextInputValue('mix_vagas'));
+            const member = interaction.member;
+
+            if (isNaN(tamanho) || tamanho < 2) return interaction.reply({ content: '❌ Número de vagas inválido.', flags: 64 });
+
+            const embed = new EmbedBuilder()
+                .setColor('#a6e3a1')
+                .setTitle(`🏆 Mix de ${jogo}`)
+                .setDescription(`Clique no botão abaixo para entrar na fila do Mix!\n\nQuando a fila atingir **${tamanho} jogadores**, os times serão sorteados inteligentemente baseados no MMR e as calls serão geradas.`)
+                .addFields({ name: `👥 Jogadores (1/${tamanho})`, value: member.toString(), inline: false })
+                .setFooter({ text: `Status: Aguardando jogadores... | Vagas: ${tamanho}` });
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('mix_join').setLabel('Entrar no Mix').setStyle(ButtonStyle.Success).setEmoji('🎮'),
+                new ButtonBuilder().setCustomId('mix_leave').setLabel('Sair').setStyle(ButtonStyle.Danger).setEmoji('🚪')
+            );
+
+            await interaction.reply({ embeds: [embed], components: [row] });
+        }
+
+        // Lógica do Sistema de MIX (Partidas Customizadas e Sorteio)
+        if (interaction.isButton() && interaction.customId.startsWith('mix_')) {
+            const embed = interaction.message.embeds[0];
+            if (!embed || !embed.footer?.text || !embed.footer.text.includes('Status: Aguardando jogadores...')) return;
+
+            // Lê o tamanho exigido do rodapé
+            const vagasMatch = embed.footer.text.match(/Vagas: (\d+)/);
+            const maxPlayers = vagasMatch ? parseInt(vagasMatch[1]) : 10;
+            
+            const field = embed.fields[0];
+            let players = field.value === 'Ninguém ainda' ? [] : field.value.split('\n');
+            const memberMention = interaction.user.toString();
+
+            if (interaction.customId === 'mix_leave') {
+                players = players.filter(p => p !== memberMention);
+            } else if (interaction.customId === 'mix_join') {
+                if (!players.includes(memberMention)) players.push(memberMention);
+            }
+
+            // Verifica se a fila encheu
+            if (players.length >= maxPlayers) {
+                await interaction.update({ components: [] }); // Desativa os botões
+                
+                // Mágica: Sorteia os times de forma aleatória justa
+                const shuffled = players.sort(() => 0.5 - Math.random());
+                const mid = Math.ceil(maxPlayers / 2);
+                const timeA = shuffled.slice(0, mid);
+                const timeB = shuffled.slice(mid, maxPlayers);
+
+                const newEmbed = new EmbedBuilder()
+                    .setColor('#ffaa00')
+                    .setTitle(embed.title)
+                    .setDescription('✅ **A fila encheu e os times foram sorteados!**\nAs calls de voz foram geradas e quem estiver conectado será movido automaticamente.')
+                    .addFields(
+                        { name: `🔵 Time A (${timeA.length})`, value: timeA.join('\n'), inline: true },
+                        { name: `🔴 Time B (${timeB.length})`, value: timeB.join('\n'), inline: true }
+                    )
+                    .setFooter({ text: 'Status: Mix Iniciado!' });
+
+                await interaction.message.edit({ embeds: [newEmbed], components: [] });
+
+                // Auto-Move: Puxa os jogadores pras calls!
+                try {
+                    const guild = interaction.guild;
+                    const category = guild.channels.cache.find(c => c.name.includes('VOZ') || c.type === ChannelType.GuildCategory);
+                    
+                    let canalA = guild.channels.cache.find(c => c.name === '🔵 Time A (Mix)' && c.type === ChannelType.GuildVoice);
+                    if (!canalA) canalA = await guild.channels.create({ name: '🔵 Time A (Mix)', type: ChannelType.GuildVoice, parent: category?.id });
+                    
+                    let canalB = guild.channels.cache.find(c => c.name === '🔴 Time B (Mix)' && c.type === ChannelType.GuildVoice);
+                    if (!canalB) canalB = await guild.channels.create({ name: '🔴 Time B (Mix)', type: ChannelType.GuildVoice, parent: category?.id });
+
+                    const movePlayers = async (team, channel) => {
+                        for (const mention of team) {
+                            const id = mention.replace(/\D/g, '');
+                            const m = await guild.members.fetch(id).catch(()=>{});
+                            // Só move quem já estiver em ALGUMA call de voz no servidor
+                            if (m && m.voice.channel) await m.voice.setChannel(channel).catch(()=>{});
+                        }
+                    };
+
+                    await movePlayers(mentionA, canalA);
+                    await movePlayers(mentionB, canalB);
+
+                } catch (err) {
+                    logger.error(`Erro ao mover membros no Mix: ${err.message}`);
+                }
+            } else {
+                // Fila não encheu ainda, apenas atualiza a contagem
+                const newEmbed = EmbedBuilder.from(embed).setFields([
+                    { name: `👥 Jogadores (${players.length}/${maxPlayers})`, value: players.length > 0 ? players.join('\n') : 'Ninguém ainda' }
+                ]);
+                await interaction.update({ embeds: [newEmbed] });
+            }
+        }
+        
+        // Pós-Partida (Resultados do Mix)
+        if (interaction.isButton() && interaction.customId.startsWith('mix_win_')) {
+            const embed = interaction.message.embeds[0];
+            if (!embed) return;
+            
+            const isBlueWin = interaction.customId === 'mix_win_a';
+            const fieldA = embed.fields.find(f => f.name.includes('Azul')).value.split('\n');
+            const fieldB = embed.fields.find(f => f.name.includes('Vermelho')).value.split('\n');
+            
+            // Garante que só quem jogou pode votar o encerramento
+            const allPlayers = [...fieldA, ...fieldB];
+            if (!allPlayers.includes(interaction.user.toString()) && !interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                return interaction.reply({ content: '❌ Apenas os jogadores do Mix ou Admins podem declarar o vencedor.', flags: 64 });
+            }
+
+            // Processa XP e Status
+            const processTeam = async (teamMentions, isWinner) => {
+                for (const mention of teamMentions) {
+                    const id = mention.replace(/\D/g, '');
+                    const data = LevelingService.getUserData(id);
+                    if (isWinner) {
+                        data.mixWins++;
+                        data.xp += 150; // Bônus gigante de vitória
+                    } else {
+                        data.mixLosses++;
+                        data.xp += 20; // Bônus de consolação
+                    }
+                }
+            };
+
+            await processTeam(fieldA, isBlueWin);
+            await processTeam(fieldB, !isBlueWin);
+            await LevelingService.saveDb();
+
+            const newEmbed = EmbedBuilder.from(embed)
+                .setTitle('🏆 Mix Encerrado')
+                .setDescription(`Partida finalizada! O **Time ${isBlueWin ? 'Azul' : 'Vermelho'}** venceu!\n\n*(Estatísticas, MMR e Experiência Militar foram creditados às contas dos jogadores)*.`)
+                .setColor(isBlueWin ? '#00a8ff' : '#e74c3c');
+                
+            await interaction.update({ embeds: [newEmbed], components: [] });
+            
+            // Limpa as calls
+            const guild = interaction.guild;
+            guild.channels.cache.filter(c => ['🔵 Time Azul (Mix)', '🔴 Time Vermelho (Mix)'].includes(c.name)).forEach(c => c.delete().catch(()=>{}));
         }
     }
 }

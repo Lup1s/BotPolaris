@@ -1,10 +1,11 @@
 import { supabase } from '../database/supabase.js';
-import { ChannelType, PermissionsBitField } from 'discord.js';
+import { ChannelType, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { logger } from '../utils/logger.js';
 
 export class TempVoiceService {
     static activeChannels = new Map();
-    static createChannelNames = ['➕ Criar Call', 'Criar Call', '➕ criar call', 'criar call'];
+    static callSessions = new Map(); // Armazena dados de inteligência da sessão atual
+    static createChannelNames = ['➕ Criar Squad', 'Criar Squad', '➕ criar call', 'criar call'];
 
     static async init(client) {
         try {
@@ -57,6 +58,11 @@ export class TempVoiceService {
                 // Se o canal existir e estiver vazio
                 if (channel.type === ChannelType.GuildVoice && channel.members.size === 0) {
                     await channel.delete('Canal temporário vazio limpo na inicialização.');
+                    
+                    // Limpar também o canal de texto atrelado, se existir
+                    const textChannel = channel.guild.channels.cache.find(c => c.topic === `LinkedVoice:${channelId}`);
+                    if (textChannel) await textChannel.delete('Limpeza de órfãos.').catch(()=>{});
+
                     this.activeChannels.delete(channelId);
                     await supabase.from('temp_channels').delete().eq('channel_id', channelId);
                     logger.info(`Canal temporário órfão apagado: ${channelId}`);
@@ -81,13 +87,26 @@ export class TempVoiceService {
             // Verifica se o canal ficou vazio
             if (channel && channel.members.size === 0) {
                 try {
+                    // Gera o resumo automático antes de deletar
+                    await this.generatePostActionReport(oldState.channelId, channel.name, oldState.guild);
+
                     this.activeChannels.delete(oldState.channelId);
+                    
+                    const textChannel = oldState.guild.channels.cache.find(c => c.topic === `LinkedVoice:${oldState.channelId}`);
+                    if (textChannel) await textChannel.delete('Último usuário saiu do canal temporário.').catch(()=>{});
+                    
                     await supabase.from('temp_channels').delete().eq('channel_id', oldState.channelId);
                     await channel.delete('Último usuário saiu do canal temporário.');
                     logger.info(`Sala temporária ${channel.name} deletada.`);
                 } catch (error) {
                     logger.error(`Erro ao deletar sala temporária ${oldState.channelId}: ${error.message}`);
                 }
+            }
+            
+            // Se saiu mas a call não está vazia, apenas retira a permissão de ver o chat privado
+            if (channel && channel.members.size > 0) {
+                const textChannel = oldState.guild.channels.cache.find(c => c.topic === `LinkedVoice:${oldState.channelId}`);
+                if (textChannel) await textChannel.permissionOverwrites.delete(member.id).catch(()=>{});
             }
         }
 
@@ -107,6 +126,12 @@ export class TempVoiceService {
                         await member.voice.disconnect('Erro ao criar sala.').catch(() => {});
                     }
                 }
+            }
+            
+            // Lógica para dar permissão no canal de texto caso entre em uma sala temporária já existente
+            if (newState.channelId && this.activeChannels.has(newState.channelId)) {
+                const textChannel = newState.guild.channels.cache.find(c => c.topic === `LinkedVoice:${newState.channelId}`);
+                if (textChannel) await textChannel.permissionOverwrites.edit(member.id, { ViewChannel: true }).catch(()=>{});
             }
         }
     }
@@ -157,9 +182,84 @@ export class TempVoiceService {
         this.activeChannels.set(newChannel.id, member.id);
         await this.saveDb();
         logger.info(`Sala temporária ${newChannel.id} criada para ${member.user.tag}.`);
+        
+        // Inicia o rastreamento inteligente da sessão
+        this.callSessions.set(newChannel.id, {
+            owner: member.id,
+            startTime: Date.now(),
+            participants: new Set([member.id]),
+            name: channelName
+        });
+
+        // Cria o Chat Temporário atrelado
+        try {
+            const textChannel = await guild.channels.create({
+                name: '💬・chat-squad',
+                type: ChannelType.GuildText,
+                parent: category ? category.id : null,
+                topic: `LinkedVoice:${newChannel.id}`, // Chave de ligação
+                permissionOverwrites: [
+                    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] }, // Esconde de todos
+                    { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel] } // Mostra para o dono
+                ]
+            });
+            
+            // Injeta o Painel de Controle Operacional
+            await this.sendCallDashboard(textChannel, member);
+        } catch (error) {
+            logger.warn(`Não foi possível criar o chat privado para o squad: ${error.message}`);
+        }
 
         // Move o usuário para a nova sala
         await member.voice.setChannel(newChannel, 'Movendo para a sala temporária recém criada');
+    }
+
+    static async sendCallDashboard(textChannel, member) {
+        const embed = new EmbedBuilder()
+            .setColor('#2b2d31')
+            .setTitle('🎛️ Terminal de Comando do Squad')
+            .setDescription('Bem-vindo à base de operações. Apenas membros deste esquadrão possuem acesso a este chat temporário.\n\nGerencie sua call utilizando os botões abaixo.')
+            .addFields({ name: 'Comandante', value: member.toString(), inline: true });
+
+        const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('call_lock').setLabel('Bloquear/Privar').setStyle(ButtonStyle.Secondary).setEmoji('🔒'),
+            new ButtonBuilder().setCustomId('call_unlock').setLabel('Tornar Pública').setStyle(ButtonStyle.Success).setEmoji('🌎'),
+            new ButtonBuilder().setCustomId('call_transfer').setLabel('Transferir Liderança').setStyle(ButtonStyle.Primary).setEmoji('👑')
+        );
+
+        await textChannel.send({ content: member.toString(), embeds: [embed], components: [row1] });
+    }
+
+    static async generatePostActionReport(channelId, channelName, guild) {
+        const session = this.callSessions.get(channelId);
+        if (!session) return;
+
+        const durationMs = Date.now() - session.startTime;
+        const durationMin = Math.floor(durationMs / 60000);
+        const durationHrs = Math.floor(durationMin / 60);
+        const formattedDuration = durationHrs > 0 ? `${durationHrs}h ${durationMin % 60}m` : `${durationMin} minutos`;
+
+        try {
+            const owner = await guild.members.fetch(session.owner).catch(()=>null);
+            if (owner) {
+                const embed = new EmbedBuilder()
+                    .setColor('#89b4fa')
+                    .setTitle('📋 Relatório Pós-Operação')
+                    .setDescription(`Seu squad **${channelName}** foi encerrado. Confira os dados da sessão:`)
+                    .addFields(
+                        { name: '⏱️ Duração', value: formattedDuration, inline: true },
+                        { name: '👥 Participantes Únicos', value: `${session.participants.size} operadores`, inline: true },
+                        { name: '📈 Reputação Ganha', value: '+15 Influência', inline: true }
+                    )
+                    .setFooter({ text: 'Sistema de Inteligência Operacional Polaris' });
+
+                await owner.send({ embeds: [embed] }).catch(()=>{});
+            }
+        } catch (e) {
+            logger.warn(`Não foi possível enviar relatório pós-ação: ${e.message}`);
+        }
+        
+        this.callSessions.delete(channelId);
     }
 
     // Métodos para o Comando
