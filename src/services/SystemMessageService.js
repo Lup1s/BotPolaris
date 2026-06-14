@@ -196,5 +196,61 @@ export class SystemMessageService {
             await interaction.reply({ content: '✅ Regras aceitas! Acesso liberado.', flags: 64 });
             // Aqui poderíamos dar um cargo de "Verificado" caso exista no servidor
         }
+
+        // Lógica para o menu de registro de jogos
+        if (interaction.isStringSelectMenu() && interaction.customId === 'select_games') {
+            await interaction.deferReply({ flags: 64 }); // flags: 64 = Resposta efêmera (só o usuário vê)
+            const guild = interaction.guild;
+            const member = interaction.member;
+            
+            // Mapeamento dos valores do menu para o nome dos cargos no Discord
+            const rolesMap = {
+                'role_cs2': 'Jogador de CS2',
+                'role_valorant': 'Jogador de Valorant',
+                'role_lol': 'Jogador de LoL',
+                'role_minecraft': 'Jogador de Minecraft'
+            };
+
+            const selectedValues = interaction.values;
+            const allPossibleValues = Object.keys(rolesMap);
+
+            try {
+                let added = [];
+                let removed = [];
+
+                for (const value of allPossibleValues) {
+                    const roleName = rolesMap[value];
+                    // Procura o cargo no servidor, se não achar, o bot cria automaticamente!
+                    let role = guild.roles.cache.find(r => r.name === roleName);
+                    if (!role) {
+                        role = await guild.roles.create({ name: roleName, color: 'Random', reason: 'Sistema de Auto-Registro' });
+                    }
+
+                    // Se o usuário selecionou essa opção, adicionamos o cargo
+                    if (selectedValues.includes(value)) {
+                        if (!member.roles.cache.has(role.id)) {
+                            await member.roles.add(role);
+                            added.push(role.name);
+                        }
+                    // Se não selecionou (ou desmarcou), removemos o cargo
+                    } else {
+                        if (member.roles.cache.has(role.id)) {
+                            await member.roles.remove(role);
+                            removed.push(role.name);
+                        }
+                    }
+                }
+
+                let replyMsg = '✅ Seus cargos foram atualizados com sucesso!\n\n';
+                if (added.length > 0) replyMsg += `**Adicionados:** ${added.join(', ')}\n`;
+                if (removed.length > 0) replyMsg += `**Removidos:** ${removed.join(', ')}`;
+                if (added.length === 0 && removed.length === 0) replyMsg = 'Nenhuma alteração foi feita nos seus cargos.';
+
+                await interaction.editReply({ content: replyMsg });
+            } catch (error) {
+                logger.error(`Erro no auto-registro: ${error.message}`);
+                await interaction.editReply({ content: '❌ Houve um erro ao atualizar seus cargos. Tente novamente mais tarde.' });
+            }
+        }
     }
 }
