@@ -39,6 +39,36 @@ export class SystemMessageService {
     static async setupCommunity(guild) {
         logger.info(`Iniciando Setup de Comunidade no servidor ${guild.name}...`);
 
+        // Automação: Configurar Permissões de Cargos Iniciais
+        try {
+            // 1. Remover permissão de ver canais e falar do @everyone
+            const everyoneRole = guild.roles.everyone;
+            const newEveryonePerms = everyoneRole.permissions.remove([
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages
+            ]);
+            await everyoneRole.setPermissions(newEveryonePerms, 'Setup automático de Onboarding');
+
+            // 2. Criar ou atualizar o cargo "Membro Verificado" com as permissões corretas
+            let verifiedRole = guild.roles.cache.find(r => r.name === 'Membro Verificado');
+            if (!verifiedRole) {
+                await guild.roles.create({
+                    name: 'Membro Verificado',
+                    color: '#a6e3a1',
+                    reason: 'Cargo para membros que aceitaram as regras',
+                    permissions: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.ReadMessageHistory,
+                        PermissionsBitField.Flags.Connect,
+                        PermissionsBitField.Flags.Speak
+                    ]
+                });
+            }
+        } catch (error) {
+            logger.warn(`Aviso ao configurar cargos: ${error.message} (Verifique se o cargo do bot é o mais alto do servidor)`);
+        }
+
         const categories = {
             INFO: await this.getOrCreateCategory(guild, '📌 INFORMAÇÕES'),
             COMUNIDADE: await this.getOrCreateCategory(guild, '💬 COMUNIDADE'),
@@ -48,7 +78,15 @@ export class SystemMessageService {
 
         const channelsDef = [
             { id: 'boas_vindas', name: '👋・boas-vindas', parent: categories.INFO.id, type: ChannelType.GuildText },
-            { id: 'regras', name: '📜・regras', parent: categories.INFO.id, type: ChannelType.GuildText },
+            { 
+                id: 'regras', 
+                name: '📜・regras', 
+                parent: categories.INFO.id, 
+                type: ChannelType.GuildText,
+                permissionOverwrites: [
+                    { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory], deny: [PermissionsBitField.Flags.SendMessages] }
+                ]
+            },
             { id: 'avisos', name: '📢・avisos', parent: categories.INFO.id, type: ChannelType.GuildText },
             
             { id: 'geral', name: '💬・chat-geral', parent: categories.COMUNIDADE.id, type: ChannelType.GuildText },
@@ -97,6 +135,9 @@ export class SystemMessageService {
             };
             if (def.type === ChannelType.GuildForum && def.availableTags) {
                 options.availableTags = def.availableTags;
+            }
+            if (def.permissionOverwrites) {
+                options.permissionOverwrites = def.permissionOverwrites;
             }
             channel = await guild.channels.create(options);
         }
@@ -206,7 +247,14 @@ export class SystemMessageService {
                     role = await guild.roles.create({ 
                         name: 'Membro Verificado', 
                         color: '#a6e3a1', 
-                        reason: 'Cargo de verificação automática' 
+                        reason: 'Cargo de verificação automática',
+                        permissions: [
+                            PermissionsBitField.Flags.ViewChannel,
+                            PermissionsBitField.Flags.SendMessages,
+                            PermissionsBitField.Flags.ReadMessageHistory,
+                            PermissionsBitField.Flags.Connect,
+                            PermissionsBitField.Flags.Speak
+                        ]
                     });
                 }
                 
