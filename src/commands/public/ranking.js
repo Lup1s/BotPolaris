@@ -1,11 +1,11 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { LevelingService } from '../../services/LevelingService.js';
 
-export const data = new SlashCommandBuilder()
+const data = new SlashCommandBuilder()
     .setName('ranking')
     .setDescription('Mostra o top 10 do servidor em experiência militar.');
 
-export async function execute(interaction) {
+async function execute(interaction) {
     await interaction.deferReply();
     try {
         const embed = await LevelingService.generateRankingEmbed(interaction.guild);
@@ -14,3 +14,5 @@ export async function execute(interaction) {
         await interaction.editReply({ content: 'Ocorreu um erro ao carregar o ranking.', flags: 64 });
     }
 }
+
+export default { data, execute };
