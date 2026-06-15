@@ -27,6 +27,8 @@ class Logger {
             console.error(logEntry.trim());
         } else if (level === 'warn') {
             console.warn(logEntry.trim());
+        } else if (level === 'debug') {
+            console.debug(logEntry.trim());
         } else {
             console.log(logEntry.trim());
         }
@@ -53,6 +55,12 @@ class Logger {
     
     security(message) {
         return this._write('security', message);
+    }
+
+    debug(message) {
+        if (process.env.DEBUG_MODE === 'true') {
+            return this._write('debug', message);
+        }
     }
 }
 

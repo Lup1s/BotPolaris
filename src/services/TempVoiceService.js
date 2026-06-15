@@ -81,6 +81,8 @@ export class TempVoiceService {
         const member = newState.member;
         if (!member) return;
 
+        logger.debug(`[TempVoice] Movimentação: ${member.user.tag} | De: ${oldState.channelId || 'Nenhum'} Para: ${newState.channelId || 'Nenhum'}`);
+
         // 1. Lógica de SAIR de um canal
         if (oldState.channelId && this.activeChannels.has(oldState.channelId)) {
             const channel = oldState.channel;

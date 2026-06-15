@@ -369,7 +369,9 @@ export class SystemMessageService {
     }
 
     static async handleInteraction(interaction) {
-        if (interaction.isButton() && interaction.customId === 'accept_rules') {
+        logger.debug(`[Interaction] Tipo: ${interaction.type} | ID/Comando: ${interaction.customId || interaction.commandName || 'N/A'} | Usuário: ${interaction.user.tag}`);
+        try {
+            if (interaction.isButton() && interaction.customId === 'accept_rules') {
             await interaction.deferReply({ flags: 64 });
             const member = interaction.member;
             const guild = interaction.guild;
@@ -795,6 +797,13 @@ export class SystemMessageService {
             // Limpa as calls
             const guild = interaction.guild;
             guild.channels.cache.filter(c => ['🔵 Time A (Mix)', '🔴 Time B (Mix)'].includes(c.name)).forEach(c => c.delete().catch(()=>{}));
+        }
+        } catch (error) {
+            logger.error(`[SystemMessageService] Falha crítica ao processar interação ${interaction.customId || 'N/A'}: ${error.message}`);
+            logger.debug(`Stack Trace:\n${error.stack}`);
+            
+            const replyMethod = interaction.deferred || interaction.replied ? 'editReply' : 'reply';
+            await interactionreplyMethod.catch(() => {});
         }
     }
 }
