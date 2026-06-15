@@ -643,8 +643,8 @@ export class SystemMessageService {
                 .setCustomId('mix_modal_submit')
                 .setTitle('Iniciar Mix Competitivo');
 
-            const jogoInput = new TextInputBuilder().setCustomId('mix_jogo').setLabel('Qual Jogo? (Ex: CS2, Valorant)').setStyle(TextInputStyle.Short).setRequired(true);
-            const vagasInput = new TextInputBuilder().setCustomId('mix_vagas').setLabel('Vagas Totais (Ex: 10)').setStyle(TextInputStyle.Short).setRequired(true);
+            const jogoInput = new TextInputBuilder().setCustomId('mix_jogo').setLabel('Qual Jogo? (Ex: CS2, Valorant)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50);
+            const vagasInput = new TextInputBuilder().setCustomId('mix_vagas').setLabel('Vagas Totais (Ex: 10)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(3);
             
             modal.addComponents(new ActionRowBuilder().addComponents(jogoInput), new ActionRowBuilder().addComponents(vagasInput));
             await interaction.showModal(modal);
