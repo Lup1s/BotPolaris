@@ -8,8 +8,8 @@ import { TicketService } from '../services/TicketService.js';
 export default {
     name: Events.InteractionCreate,
     async execute(interaction) {
-        // Intercepta Componentes (Botões e Selects) para os serviços
-        if (interaction.isButton() || interaction.isStringSelectMenu()) {
+        // Intercepta Componentes (Botões, Selects e Modals) para os serviços
+        if (interaction.isButton() || interaction.isAnySelectMenu() || interaction.isModalSubmit()) {
             try {
                 await SystemMessageService.handleInteraction(interaction);
                 await TicketService.handleInteraction(interaction);
@@ -44,11 +44,15 @@ export default {
         } catch (error) {
             logger.error(`Erro ao executar ${interaction.commandName}: ${error.message}`);
             
-            const replyContent = 'Ocorreu um erro ao executar este comando!';
-            if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ content: replyContent, flags: 64 });
-            } else {
-                await interaction.reply({ content: replyContent, flags: 64 });
+            try {
+                const replyContent = 'Ocorreu um erro ao executar este comando!';
+                if (interaction.replied || interaction.deferred) {
+                    await interaction.followUp({ content: replyContent, flags: 64 });
+                } else {
+                    await interaction.reply({ content: replyContent, flags: 64 });
+                }
+            } catch (replyError) {
+                logger.error(`Erro ao enviar resposta de erro no interactionCreate: ${replyError.message}`);
             }
         }
     },
