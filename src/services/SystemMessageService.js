@@ -124,6 +124,141 @@ export class SystemMessageService {
         logger.info(`Setup de Comunidade concluído.`);
     }
 
+    static async configureExistingChannels(guild) {
+        logger.info(`Reconfigurando canais existentes no servidor ${guild.name}...`);
+
+        const everyoneRole = guild.roles.everyone;
+
+        // Obter os cargos de Staff/Administradores para conceder permissão de escrita
+        const staffRole = guild.roles.cache.find(r => r.name.toLowerCase().includes('staff') || r.name.toLowerCase().includes('moderador') || r.name.toLowerCase().includes('mod'));
+        const adminRole = guild.roles.cache.find(r => r.name.toLowerCase().includes('admin') || r.name.toLowerCase().includes('administrador'));
+
+        const keys = ['boas_vindas', 'regras', 'avisos', 'anuncios', 'noticias', 'comandos'];
+
+        for (const key of keys) {
+            const channelId = this.config.channels[key];
+            if (!channelId) continue;
+
+            const channel = guild.channels.cache.get(channelId);
+            if (!channel) {
+                logger.warn(`Canal para chave "${key}" com ID ${channelId} não encontrado no servidor.`);
+                continue;
+            }
+
+            try {
+                // Definir as permissões base para @everyone
+                const allowPerms = [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory];
+                const denyPerms = [PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AddReactions];
+
+                if (key === 'comandos') {
+                    allowPerms.push(PermissionsBitField.Flags.UseApplicationCommands);
+                }
+
+                const overwrites = [
+                    {
+                        id: everyoneRole.id,
+                        allow: allowPerms,
+                        deny: denyPerms
+                    }
+                ];
+
+                // Para canais onde a Staff/Admin pode escrever (avisos, anuncios, noticias)
+                if (['avisos', 'anuncios', 'noticias'].includes(key)) {
+                    if (adminRole) {
+                        overwrites.push({
+                            id: adminRole.id,
+                            allow: [
+                                PermissionsBitField.Flags.ViewChannel,
+                                PermissionsBitField.Flags.SendMessages,
+                                PermissionsBitField.Flags.EmbedLinks,
+                                PermissionsBitField.Flags.AttachFiles,
+                                PermissionsBitField.Flags.MentionEveryone
+                            ]
+                        });
+                    }
+                    if (staffRole) {
+                        overwrites.push({
+                            id: staffRole.id,
+                            allow: [
+                                PermissionsBitField.Flags.ViewChannel,
+                                PermissionsBitField.Flags.SendMessages,
+                                PermissionsBitField.Flags.EmbedLinks,
+                                PermissionsBitField.Flags.AttachFiles
+                            ]
+                        });
+                    }
+                }
+
+                await channel.permissionOverwrites.set(overwrites, 'Reconfiguração automática de segurança do canal.');
+                logger.info(`Permissões do canal #${channel.name} (${key}) reconfiguradas.`);
+
+                // Garante que o painel de regras ou lista de comandos existam
+                if (key === 'regras') {
+                    await this.ensureRulesMessage(channel);
+                } else if (key === 'comandos') {
+                    await this.ensureCommandsListMessage(channel);
+                }
+            } catch (err) {
+                logger.error(`Erro ao reconfigurar permissões do canal ${channelId} (${key}): ${err.message}`);
+            }
+        }
+        
+        await this.saveDb();
+    }
+
+    static async ensureCommandsListMessage(channel) {
+        const msgId = this.config.messages.comandos_lista;
+        if (msgId) {
+            try {
+                await channel.messages.fetch(msgId);
+                return; // Já existe
+            } catch (e) { /* Apagada */ }
+        }
+
+        const embed = new EmbedBuilder()
+            .setColor('#89b4fa') // Cor temática
+            .setTitle('🌌 Central de Operações: Comandos do Bot')
+            .setDescription('Aqui está a lista de comandos de barra (/) disponíveis para todos os membros no servidor. Use os comandos diretamente no chat deste canal!')
+            .addFields(
+                { 
+                    name: '👤 Utilidades e Social', 
+                    value: '• `/perfil` - Mostra seu perfil social, patente militar, prestígio e estatísticas.\n' +
+                           '• `/ranking` - Exibe o Quadro de Honra com o Top 10 de membros em XP.\n' +
+                           '• `/ping` - Verifica a latência atual do bot e da API do Discord.\n' +
+                           '• `/info` - Informações técnicas sobre a arquitetura do BotPolaris.',
+                    inline: false 
+                },
+                { 
+                    name: '🎯 Gerenciamento de Squad (Canais Temporários)', 
+                    value: '• `/sala info` - Mostra as informações da sua sala de voz atual.\n' +
+                           '• `/sala renomear [nome]` - Altera o nome do seu canal temporário.\n' +
+                           '• `/sala limite [número]` - Define um limite de usuários na call (0 para ilimitado).\n' +
+                           '• `/sala bloquear` / `/sala liberar` - Controla se novos membros podem conectar na call.\n' +
+                           '• `/sala privado` / `/sala publico` - Controla a visibilidade da sala na lista de canais.\n' +
+                           '• `/sala convidar [usuário]` - Permite que alguém específico entre na sua sala trancada.\n' +
+                           '• `/sala expulsar [usuário]` - Remove e bloqueia um usuário da sua call.\n' +
+                           '• `/sala transferir [usuário]` - Passa a liderança da sala para outro membro.\n' +
+                           '• `/fechar-squad` - Encerra imediatamente o seu canal de voz e chat temporários.',
+                    inline: false 
+                },
+                { 
+                    name: '🎮 Jogos e Competitivo', 
+                    value: '• `/vincular valorant [Riot_ID#Tag]` - Associa sua conta do Valorant e recebe o cargo correspondente ao seu Elo automaticamente.\n' +
+                           '• `/mix [jogo] [tamanho_lobby]` - Cria um lobby para partida customizada, realiza o sorteio equilibrado de times e move todos automaticamente para as calls.',
+                    inline: false 
+                }
+            )
+            .setThumbnail('https://i.imgur.com/8QG3mQ9.png')
+            .setFooter({ text: 'Dica: Digite / para abrir a lista interativa de comandos do Discord.' })
+            .setTimestamp();
+
+        const msg = await channel.send({ embeds: [embed] });
+        if (msg.pinnable) await msg.pin().catch(()=>{});
+        
+        this.config.messages.comandos_lista = msg.id;
+        await this.saveDb();
+    }
+
     // Engine de Ambientes Dinâmicos (Workspaces)
     static async createPrivateEnvironment(guild, member, envType, icon, setupCallback) {
         const category = await this.getOrCreateCategory(guild, '📱 AMBIENTES PRIVADOS');
@@ -360,7 +495,15 @@ export class SystemMessageService {
                 .setFooter({ text: `Agora somos ${guild.memberCount} membros!` })
                 .setTimestamp();
             
-            await channel.send({ embeds: [embed] }).catch(()=>{});
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`welcome_greet_${member.id}`)
+                    .setLabel('Dar as Boas-Vindas!')
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji('👋')
+            );
+
+            await channel.send({ embeds: [embed], components: [row] }).catch(()=>{});
         }
 
         // 3. DM
@@ -371,6 +514,18 @@ export class SystemMessageService {
     static async handleInteraction(interaction) {
         logger.debug(`[Interaction] Tipo: ${interaction.type} | ID/Comando: ${interaction.customId || interaction.commandName || 'N/A'} | Usuário: ${interaction.user.tag}`);
         try {
+            if (interaction.isButton() && interaction.customId.startsWith('welcome_greet_')) {
+                await interaction.deferReply({ flags: 64 });
+                const targetMemberId = interaction.customId.replace('welcome_greet_', '');
+                await interaction.editReply({ content: '✅ Você deu boas-vindas para o novo recruta!' });
+
+                const greetMsg = await interaction.channel.send(`👋 ${interaction.user.toString()} deu as boas-vindas a <@${targetMemberId}>!`);
+                setTimeout(() => {
+                    greetMsg.delete().catch(() => {});
+                }, 5000);
+                return;
+            }
+
             if (interaction.isButton() && interaction.customId === 'accept_rules') {
             await interaction.deferReply({ flags: 64 });
             const member = interaction.member;
