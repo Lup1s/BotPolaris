@@ -1,6 +1,8 @@
 import { supabase } from '../database/supabase.js';
 import { ChannelType, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { logger } from '../utils/logger.js';
+import fsSync from 'fs';
+import path from 'path';
 
 export class TempVoiceService {
     static activeChannels = new Map();
@@ -264,11 +266,98 @@ export class TempVoiceService {
             await supabase.from('temp_channels').delete().eq('channel_id', channelId);
             await channel.delete(reason);
             logger.info(`Sala temporária ${channel.name} deletada: ${reason}`);
+
+            // Procurar e fechar o embed do LFG no canal de squad
+            try {
+                const configPath = path.resolve('src', 'database', 'system_config.json');
+                if (fsSync.existsSync(configPath)) {
+                    const config = JSON.parse(fsSync.readFileSync(configPath, 'utf8'));
+                    const lfgChannelId = config.channels?.squad;
+                    if (lfgChannelId) {
+                        const lfgChannel = guild.channels.cache.get(lfgChannelId);
+                        if (lfgChannel) {
+                            const messages = await lfgChannel.messages.fetch({ limit: 50 }).catch(() => null);
+                            if (messages) {
+                                const lfgMsg = messages.find(m => m.embeds[0]?.footer?.text?.includes(`Canal ID: ${channelId}`));
+                                if (lfgMsg) {
+                                    const embed = lfgMsg.embeds[0];
+                                    const closedEmbed = EmbedBuilder.from(embed)
+                                        .setTitle(`🔴 [Encerrado] ${embed.title.replace('🎮 ', '').replace('🔴 ', '')}`)
+                                        .setColor('#e74c3c');
+                                    await lfgMsg.edit({ embeds: [closedEmbed], components: [] }).catch(() => {});
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                logger.warn(`Não foi possível atualizar o embed do LFG no encerramento do squad: ${err.message}`);
+            }
+
             return true;
         } catch (error) {
             logger.error(`Erro ao deletar sala temporária ${channelId}: ${error.message}`);
             throw error;
         }
+    }
+
+    static async createLfgSquadChannel(member, game) {
+        const guild = member.guild;
+        const category = guild.channels.cache.find(c => c.name.includes('VOZ') || c.type === ChannelType.GuildCategory);
+
+        let channelName = `🎯 Squad: ${game}`;
+
+        const newChannel = await guild.channels.create({
+            name: channelName,
+            type: ChannelType.GuildVoice,
+            parent: category ? category.id : null,
+            permissionOverwrites: [
+                {
+                    id: guild.id,
+                    allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel],
+                },
+                {
+                    id: member.id,
+                    allow: [
+                        PermissionsBitField.Flags.ManageChannels,
+                        PermissionsBitField.Flags.ManageRoles,
+                        PermissionsBitField.Flags.MoveMembers,
+                        PermissionsBitField.Flags.Connect,
+                        PermissionsBitField.Flags.Speak
+                    ],
+                }
+            ],
+            reason: `LFG Squad criado por ${member.user.tag}`
+        });
+
+        this.activeChannels.set(newChannel.id, member.id);
+        await this.saveDb();
+        
+        this.callSessions.set(newChannel.id, {
+            owner: member.id,
+            startTime: Date.now(),
+            participants: new Set([member.id]),
+            name: channelName
+        });
+
+        // Criar o chat temporário associado
+        try {
+            const textChannel = await guild.channels.create({
+                name: '💬・chat-squad',
+                type: ChannelType.GuildText,
+                parent: category ? category.id : null,
+                topic: `LinkedVoice:${newChannel.id}`,
+                permissionOverwrites: [
+                    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel] }
+                ]
+            });
+            await this.sendCallDashboard(textChannel, member);
+        } catch (error) {
+            logger.warn(`Não foi possível criar o chat privado para o LFG squad: ${error.message}`);
+        }
+
+        return newChannel;
     }
 
     // Métodos para o Comando

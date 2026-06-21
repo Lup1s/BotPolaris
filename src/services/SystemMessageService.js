@@ -4,6 +4,7 @@ import path from 'path';
 import { logger } from '../utils/logger.js';
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, PermissionsBitField, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } from 'discord.js';
 import { LevelingService } from './LevelingService.js';
+import { TempVoiceService } from './TempVoiceService.js';
 
 export class SystemMessageService {
     static dbPath = path.resolve('src', 'database', 'system_config.json');
@@ -709,55 +710,73 @@ export class SystemMessageService {
 
         // Lógica de quando o membro preenche e envia o Formulário
         if (interaction.isModalSubmit() && interaction.customId === 'lfg_modal_submit') {
+            await interaction.deferReply({ flags: 64 });
+            
             const jogo = interaction.fields.getTextInputValue('lfg_jogo');
             const vagasStr = interaction.fields.getTextInputValue('lfg_vagas');
             const detalhes = interaction.fields.getTextInputValue('lfg_detalhes');
             
             const vagas = parseInt(vagasStr);
             if (isNaN(vagas) || vagas < 1 || vagas > 20) {
-                return interaction.reply({ content: '❌ O número de vagas deve ser um número válido entre 1 e 20.', flags: 64 });
+                return interaction.editReply('❌ O número de vagas deve ser um número válido entre 1 e 20.');
             }
 
             const member = interaction.member;
 
-            // Tenta encontrar o cargo no servidor para marcar (pingar) a galera daquele jogo inteligentemente
-            let rolePing = '';
-            const jogoLower = jogo.toLowerCase();
-            const role = interaction.guild.roles.cache.find(r => 
-                r.name.toLowerCase() === `jogador de ${jogoLower}` || 
-                (r.name.toLowerCase().includes(jogoLower) && r.name.toLowerCase().includes('jogador'))
-            );
-            if (role) rolePing = role.toString();
+            try {
+                // Criar canais temporários do squad
+                const voiceChannel = await TempVoiceService.createLfgSquadChannel(member, jogo);
+                
+                // Tenta encontrar o cargo no servidor para marcar (pingar) a galera daquele jogo inteligentemente
+                let rolePing = '';
+                const jogoLower = jogo.toLowerCase();
+                const role = interaction.guild.roles.cache.find(r => 
+                    r.name.toLowerCase() === `jogador de ${jogoLower}` || 
+                    (r.name.toLowerCase().includes(jogoLower) && r.name.toLowerCase().includes('jogador'))
+                );
+                if (role) rolePing = role.toString();
 
-            const totalVagas = vagas + 1; // Vagas abertas + o Líder
+                const totalVagas = vagas + 1; // Vagas abertas + o Líder
 
-            const embed = new EmbedBuilder()
-                .setColor('#f9e2af') // Cor amarela pastel
-                .setTitle(`🎮 Procurando Esquadrão: ${jogo}`)
-                .setDescription(`O jogador ${member.toString()} está recrutando!`)
-                .addFields(
-                    { name: '👑 Líder', value: member.toString(), inline: true },
-                    { name: '👥 Vagas', value: `1/${totalVagas}`, inline: true },
-                    { name: '📝 Detalhes', value: detalhes || 'Nenhum detalhe adicional informado.', inline: false },
-                    { name: '✅ Confirmados (1)', value: member.toString(), inline: false },
-                    { name: '❓ Talvez (0)', value: 'Ninguém ainda', inline: false }
-                )
-                .setFooter({ text: `Vagas Totais: ${totalVagas} | Líder ID: ${member.id}` })
-                .setTimestamp();
+                const embed = new EmbedBuilder()
+                    .setColor('#f9e2af') // Cor amarela pastel
+                    .setTitle(`🎮 Procurando Esquadrão: ${jogo}`)
+                    .setDescription(`O jogador ${member.toString()} está recrutando!\n\n🔊 **Canal de Voz:** ${voiceChannel.toString()}`)
+                    .addFields(
+                        { name: '👑 Líder', value: member.toString(), inline: true },
+                        { name: '👥 Vagas', value: `1/${totalVagas}`, inline: true },
+                        { name: '📝 Detalhes', value: detalhes || 'Nenhum detalhe adicional informado.', inline: false },
+                        { name: '✅ Confirmados (1)', value: member.toString(), inline: false },
+                        { name: '❓ Talvez (0)', value: 'Ninguém ainda', inline: false }
+                    )
+                    .setFooter({ text: `Vagas Totais: ${totalVagas} | Líder ID: ${member.id} | Canal ID: ${voiceChannel.id}` })
+                    .setTimestamp();
 
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('lfg_join').setLabel('Eu vou!').setStyle(ButtonStyle.Success).setEmoji('✅'),
-                new ButtonBuilder().setCustomId('lfg_maybe').setLabel('Talvez').setStyle(ButtonStyle.Secondary).setEmoji('❓'),
-                new ButtonBuilder().setCustomId('lfg_leave').setLabel('Sair').setStyle(ButtonStyle.Danger).setEmoji('🚪')
-            );
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('lfg_join').setLabel('Eu vou!').setStyle(ButtonStyle.Success).setEmoji('✅'),
+                    new ButtonBuilder().setCustomId('lfg_maybe').setLabel('Talvez').setStyle(ButtonStyle.Secondary).setEmoji('❓'),
+                    new ButtonBuilder().setCustomId('lfg_leave').setLabel('Sair').setStyle(ButtonStyle.Danger).setEmoji('🚪')
+                );
 
-            await interaction.reply({ content: rolePing || null, embeds: [embed], components: [row] });
+                // Envia a mensagem no canal de LFG
+                await interaction.channel.send({ content: rolePing || null, embeds: [embed], components: [row] });
+                
+                // Se o líder já estiver em algum canal de voz, move-o para a nova call!
+                if (member.voice.channel) {
+                    await member.voice.setChannel(voiceChannel).catch(()=>{});
+                }
+
+                await interaction.editReply({ content: `✅ Esquadrão anunciado com sucesso! Call temporária criada: ${voiceChannel.toString()}` });
+            } catch (err) {
+                logger.error(`Erro ao processar modal de LFG: ${err.message}`);
+                await interaction.editReply(`❌ Erro ao criar o esquadrão: ${err.message}`);
+            }
         }
 
         // Lógica do LFG (Procurando Esquadrão)
         if (interaction.isButton() && interaction.customId.startsWith('lfg_')) {
             const embed = interaction.message.embeds[0];
-            if (!embed) return;
+            if (!embed || !embed.footer?.text) return;
 
             const memberMention = interaction.user.toString();
             const fields = embed.fields;
@@ -770,9 +789,11 @@ export class SystemMessageService {
             const totalSlots = totalSlotsMatch ? parseInt(totalSlotsMatch[1]) : 5;
             const leaderIdMatch = embed.footer.text.match(/Líder ID: (\d+)/);
             const leaderId = leaderIdMatch ? leaderIdMatch[1] : '';
+            const voiceChannelIdMatch = embed.footer.text.match(/Canal ID: (\d+)/);
+            const voiceChannelId = voiceChannelIdMatch ? voiceChannelIdMatch[1] : '';
 
-            if (interaction.customId === 'lfg_leave' && interaction.user.id === leaderId) {
-                return interaction.reply({ content: '❌ Você é o líder do esquadrão! Se quiser cancelar o chamado, apague a mensagem.', flags: 64 });
+            if (['lfg_leave', 'lfg_maybe'].includes(interaction.customId) && interaction.user.id === leaderId) {
+                return interaction.reply({ content: '❌ Você é o líder do esquadrão! Se quiser cancelar o chamado, apague a mensagem (ela também excluirá a call e o chat temporários).', flags: 64 });
             }
 
             let confirmList = confirmField.value === 'Ninguém ainda' ? [] : confirmField.value.split('\n');
@@ -782,11 +803,35 @@ export class SystemMessageService {
             confirmList = confirmList.filter(u => u !== memberMention);
             maybeList = maybeList.filter(u => u !== memberMention);
 
+            const guild = interaction.guild;
+            const textChannel = guild.channels.cache.find(c => c.topic === `LinkedVoice:${voiceChannelId}`);
+
             if (interaction.customId === 'lfg_join') {
                 if (confirmList.length >= totalSlots) return interaction.reply({ content: '❌ As vagas para este esquadrão já estão preenchidas!', flags: 64 });
                 confirmList.push(memberMention);
+
+                // Adiciona permissão de ver o chat privado
+                if (textChannel) {
+                    await textChannel.permissionOverwrites.edit(interaction.user.id, { ViewChannel: true }).catch(()=>{});
+                }
+                // Adiciona na sessão
+                const session = TempVoiceService.callSessions.get(voiceChannelId);
+                if (session) session.participants.add(interaction.user.id);
+
+                // Auto-move para a call se estiver conectado
+                if (interaction.member.voice.channel && voiceChannelId) {
+                    const voiceChannel = guild.channels.cache.get(voiceChannelId);
+                    if (voiceChannel) await interaction.member.voice.setChannel(voiceChannel).catch(()=>{});
+                }
             } else if (interaction.customId === 'lfg_maybe') {
                 maybeList.push(memberMention);
+                if (textChannel) {
+                    await textChannel.permissionOverwrites.delete(interaction.user.id).catch(()=>{});
+                }
+            } else if (interaction.customId === 'lfg_leave') {
+                if (textChannel) {
+                    await textChannel.permissionOverwrites.delete(interaction.user.id).catch(()=>{});
+                }
             }
 
             const confirmStr = confirmList.length > 0 ? confirmList.join('\n') : 'Ninguém ainda';
@@ -862,21 +907,71 @@ export class SystemMessageService {
             if (players.length >= maxPlayers) {
                 await interaction.update({ components: [] }); // Desativa os botões
                 
-                // Mágica: Sorteia os times de forma aleatória justa
-                const shuffled = players.sort(() => 0.5 - Math.random());
-                const mid = Math.ceil(maxPlayers / 2);
-                const timeA = shuffled.slice(0, mid);
-                const timeB = shuffled.slice(mid, maxPlayers);
+                // Mágica: Ordena por MMR e faz Snake Draft
+                const mappedPlayers = [];
+                for (const mention of players) {
+                    const id = mention.replace(/\D/g, '');
+                    const mmr = LevelingService.getPlayerMmr(id);
+                    mappedPlayers.push({ id, mention, mmr });
+                }
+
+                // Ordena decrescente por MMR
+                mappedPlayers.sort((a, b) => b.mmr - a.mmr);
+
+                const teamA = [];
+                const teamB = [];
+                // Padrão Snake Draft clássico
+                for (let i = 0; i < mappedPlayers.length; i++) {
+                    if (i % 4 === 0 || i % 4 === 3) {
+                        teamA.push(mappedPlayers[i]);
+                    } else {
+                        teamB.push(mappedPlayers[i]);
+                    }
+                }
+
+                const avgMmrA = Math.round(teamA.reduce((sum, p) => sum + p.mmr, 0) / teamA.length);
+                const avgMmrB = Math.round(teamB.reduce((sum, p) => sum + p.mmr, 0) / teamB.length);
+
+                const timeAMentions = teamA.map(p => p.mention);
+                const timeBMentions = teamB.map(p => p.mention);
+
+                // Auto-Move: Puxa os jogadores pras calls únicas!
+                let canalA, canalB;
+                const mixId = interaction.message.id.slice(-4);
+                const guild = interaction.guild;
+                try {
+                    const category = guild.channels.cache.find(c => c.name.includes('VOZ') || c.type === ChannelType.GuildCategory);
+                    
+                    const canalNameA = `🔵 Time A - Mix #${mixId}`;
+                    const canalNameB = `🔴 Time B - Mix #${mixId}`;
+
+                    canalA = await guild.channels.create({ name: canalNameA, type: ChannelType.GuildVoice, parent: category?.id });
+                    canalB = await guild.channels.create({ name: canalNameB, type: ChannelType.GuildVoice, parent: category?.id });
+
+                    const movePlayers = async (team, channel) => {
+                        for (const p of team) {
+                            const m = await guild.members.fetch(p.id).catch(()=>{});
+                            // Só move quem já estiver em ALGUMA call de voz no servidor
+                            if (m && m.voice.channel) await m.voice.setChannel(channel).catch(()=>{});
+                        }
+                    };
+
+                    await movePlayers(teamA, canalA);
+                    await movePlayers(teamB, canalB);
+
+                } catch (err) {
+                    logger.error(`Erro ao criar calls ou mover membros no Mix: ${err.message}`);
+                }
 
                 const newEmbed = new EmbedBuilder()
                     .setColor('#ffaa00')
                     .setTitle(embed.title)
-                    .setDescription('✅ **A fila encheu e os times foram sorteados!**\nAs calls de voz foram geradas e quem estiver conectado será movido automaticamente.')
+                    .setDescription('✅ **A fila encheu e os times foram sorteados por MMR (Snake Draft)!**\nAs DMs com as escalações foram enviadas e as calls de voz foram geradas.')
                     .addFields(
-                        { name: `🔵 Time A (${timeA.length})`, value: timeA.join('\n'), inline: true },
-                        { name: `🔴 Time B (${timeB.length})`, value: timeB.join('\n'), inline: true }
+                        { name: `🔵 Time A (${teamA.length}) | Média: ${avgMmrA} MMR`, value: timeAMentions.join('\n'), inline: true },
+                        { name: `🔴 Time B (${teamB.length}) | Média: ${avgMmrB} MMR`, value: timeBMentions.join('\n'), inline: true }
                     )
-                    .setFooter({ text: 'Status: Mix Iniciado!' });
+                    .setFooter({ text: `Status: Mix Iniciado! | Caps: ${teamA[0].id},${teamB[0].id} | Canais: ${canalA?.id || ''},${canalB?.id || ''}` });
 
                 const rowWin = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('mix_win_a').setLabel('Vitória Time A').setStyle(ButtonStyle.Primary).setEmoji('🔵'),
@@ -885,31 +980,39 @@ export class SystemMessageService {
 
                 await interaction.message.edit({ embeds: [newEmbed], components: [rowWin] });
 
-                // Auto-Move: Puxa os jogadores pras calls!
+                // Pings e DMs aos jogadores
                 try {
-                    const guild = interaction.guild;
-                    const category = guild.channels.cache.find(c => c.name.includes('VOZ') || c.type === ChannelType.GuildCategory);
-                    
-                    let canalA = guild.channels.cache.find(c => c.name === '🔵 Time A (Mix)' && c.type === ChannelType.GuildVoice);
-                    if (!canalA) canalA = await guild.channels.create({ name: '🔵 Time A (Mix)', type: ChannelType.GuildVoice, parent: category?.id });
-                    
-                    let canalB = guild.channels.cache.find(c => c.name === '🔴 Time B (Mix)' && c.type === ChannelType.GuildVoice);
-                    if (!canalB) canalB = await guild.channels.create({ name: '🔴 Time B (Mix)', type: ChannelType.GuildVoice, parent: category?.id });
-
-                    const movePlayers = async (team, channel) => {
-                        for (const mention of team) {
-                            const id = mention.replace(/\D/g, '');
-                            const m = await guild.members.fetch(id).catch(()=>{});
-                            // Só move quem já estiver em ALGUMA call de voz no servidor
-                            if (m && m.voice.channel) await m.voice.setChannel(channel).catch(()=>{});
+                    const notifyPlayer = async (playerObj, myTeam, myTeammates, avgMmrMy, avgMmrOpp, channelInvite) => {
+                        try {
+                            const user = await guild.members.fetch(playerObj.id);
+                            if (user) {
+                                const dmEmbed = new EmbedBuilder()
+                                    .setColor(myTeam.includes('A') ? '#00a8ff' : '#e74c3c')
+                                    .setTitle('🎮 Seu Mix Competitivo Iniciou!')
+                                    .setDescription(`Você foi escalado para o **${myTeam}**.\nConecte-se na call correspondente para jogar.`)
+                                    .addFields(
+                                        { name: '👥 Seus Companheiros', value: myTeammates.map(p => `${p.mention} (Level ${LevelingService.getUserData(p.id).level})`).join('\n') || 'Ninguém', inline: false },
+                                        { name: '⚖️ Comparação de Forças', value: `Seu Time: **${avgMmrMy} MMR Médio**\nAdversários: **${avgMmrOpp} MMR Médio**`, inline: false },
+                                        { name: '🔊 Seu Canal de Voz', value: channelInvite ? `${channelInvite.toString()}` : 'Não gerado', inline: false }
+                                    )
+                                    .setFooter({ text: 'Sistema de Matchmaking Polaris' })
+                                    .setTimestamp();
+                                
+                                await user.send({ embeds: [dmEmbed] }).catch(()=>{});
+                            }
+                        } catch (err) {
+                            logger.warn(`Não foi possível enviar DM de Mix para ${playerObj.id}: ${err.message}`);
                         }
                     };
 
-                    await movePlayers(timeA, canalA);
-                    await movePlayers(timeB, canalB);
-
-                } catch (err) {
-                    logger.error(`Erro ao mover membros no Mix: ${err.message}`);
+                    for (const p of teamA) {
+                        await notifyPlayer(p, '🔵 Time A', teamA.filter(x => x.id !== p.id), avgMmrA, avgMmrB, canalA);
+                    }
+                    for (const p of teamB) {
+                        await notifyPlayer(p, '🔴 Time B', teamB.filter(x => x.id !== p.id), avgMmrB, avgMmrA, canalB);
+                    }
+                } catch (dmErr) {
+                    logger.error(`Erro ao notificar DMs do Mix: ${dmErr.message}`);
                 }
             } else {
                 // Fila não encheu ainda, apenas atualiza a contagem
@@ -923,22 +1026,33 @@ export class SystemMessageService {
         // Pós-Partida (Resultados do Mix)
         if (interaction.isButton() && interaction.customId.startsWith('mix_win_')) {
             const embed = interaction.message.embeds[0];
-            if (!embed) return;
+            if (!embed || !embed.footer?.text) return;
+
+            // Lê capitães e canais do rodapé
+            const capsMatch = embed.footer.text.match(/Caps: (\d+),(\d+)/);
+            const capAId = capsMatch ? capsMatch[1] : '';
+            const capBId = capsMatch ? capsMatch[2] : '';
+            
+            const channelsMatch = embed.footer.text.match(/Canais: (\d+),(\d+)/);
+            const canalAId = channelsMatch ? channelsMatch[1] : '';
+            const canalBId = channelsMatch ? channelsMatch[2] : '';
+
+            // Restrição de Capitães e Admins
+            const isCap = interaction.user.id === capAId || interaction.user.id === capBId;
+            const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+            if (!isCap && !isAdmin) {
+                return interaction.reply({ content: '❌ Apenas os Capitães dos times (maiores MMRs) ou Administradores podem declarar o vencedor da partida.', flags: 64 });
+            }
             
             const isBlueWin = interaction.customId === 'mix_win_a';
             const fieldA = embed.fields.find(f => f.name.includes('Time A')).value.split('\n');
             const fieldB = embed.fields.find(f => f.name.includes('Time B')).value.split('\n');
             
-            // Garante que só quem jogou pode votar o encerramento
-            const allPlayers = [...fieldA, ...fieldB];
-            if (!allPlayers.includes(interaction.user.toString()) && !interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                return interaction.reply({ content: '❌ Apenas os jogadores do Mix ou Admins podem declarar o vencedor.', flags: 64 });
-            }
-
             // Processa XP e Status
             const processTeam = async (teamMentions, isWinner) => {
                 for (const mention of teamMentions) {
                     const id = mention.replace(/\D/g, '');
+                    if (!id) continue;
                     const data = LevelingService.getUserData(id);
                     if (isWinner) {
                         data.mixWins = (data.mixWins || 0) + 1;
@@ -947,8 +1061,17 @@ export class SystemMessageService {
                         data.mixLosses = (data.mixLosses || 0) + 1;
                         data.xp += 20; // Bônus de consolação
                     }
+                    data.lobbiesJoined = (data.lobbiesJoined || 0) + 1;
+
+                    // Verifica promoção e patente imediatamente
+                    const memberObj = await interaction.guild.members.fetch(id).catch(() => null);
+                    if (memberObj) {
+                        await LevelingService.checkLevelUp(memberObj, interaction.channel, data);
+                    }
                 }
             };
+
+            await interaction.deferUpdate();
 
             await processTeam(fieldA, isBlueWin);
             await processTeam(fieldB, !isBlueWin);
@@ -957,13 +1080,21 @@ export class SystemMessageService {
             const newEmbed = EmbedBuilder.from(embed)
                 .setTitle('🏆 Mix Encerrado')
                 .setDescription(`Partida finalizada! O **Time ${isBlueWin ? 'A' : 'B'}** venceu!\n\n*(Estatísticas, MMR e Experiência Militar foram creditados às contas dos jogadores)*.`)
-                .setColor(isBlueWin ? '#00a8ff' : '#e74c3c');
+                .setColor(isBlueWin ? '#00a8ff' : '#e74c3c')
+                .setFooter({ text: 'Status: Encerrado' });
                 
-            await interaction.update({ embeds: [newEmbed], components: [] });
+            await interaction.editReply({ embeds: [newEmbed], components: [] });
             
             // Limpa as calls
             const guild = interaction.guild;
-            guild.channels.cache.filter(c => ['🔵 Time A (Mix)', '🔴 Time B (Mix)'].includes(c.name)).forEach(c => c.delete().catch(()=>{}));
+            if (canalAId) {
+                const cA = guild.channels.cache.get(canalAId);
+                if (cA) await cA.delete('Mix encerrado').catch(()=>{});
+            }
+            if (canalBId) {
+                const cB = guild.channels.cache.get(canalBId);
+                if (cB) await cB.delete('Mix encerrado').catch(()=>{});
+            }
         }
         } catch (error) {
             logger.error(`[SystemMessageService] Falha crítica ao processar interação ${interaction.customId || 'N/A'}: ${error.message}`);
