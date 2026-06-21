@@ -88,25 +88,11 @@ export class TempVoiceService {
             const channel = oldState.channel;
             // Verifica se o canal ficou vazio
             if (channel && channel.members.size === 0) {
-                try {
-                    // Gera o resumo automático antes de deletar
-                    await this.generatePostActionReport(oldState.channelId, channel.name, oldState.guild);
-
-                    this.activeChannels.delete(oldState.channelId);
-                    
-                    const textChannel = oldState.guild.channels.cache.find(c => c.topic === `LinkedVoice:${oldState.channelId}`);
-                    if (textChannel) await textChannel.delete('Último usuário saiu do canal temporário.').catch(()=>{});
-                    
-                    await supabase.from('temp_channels').delete().eq('channel_id', oldState.channelId);
-                    await channel.delete('Último usuário saiu do canal temporário.');
-                    logger.info(`Sala temporária ${channel.name} deletada.`);
-                } catch (error) {
-                    logger.error(`Erro ao deletar sala temporária ${oldState.channelId}: ${error.message}`);
-                }
+                await this.closeSquad(channel, oldState.guild, 'Último usuário saiu do canal temporário.');
             }
             
             // Se saiu mas a call não está vazia, apenas retira a permissão de ver o chat privado
-            if (channel && channel.members.size > 0) {
+            else if (channel && channel.members.size > 0) {
                 const textChannel = oldState.guild.channels.cache.find(c => c.topic === `LinkedVoice:${oldState.channelId}`);
                 if (textChannel) await textChannel.permissionOverwrites.delete(member.id).catch(()=>{});
             }
@@ -262,6 +248,27 @@ export class TempVoiceService {
         }
         
         this.callSessions.delete(channelId);
+    }
+
+    static async closeSquad(channel, guild, reason = 'Squad encerrado.') {
+        const channelId = channel.id;
+        try {
+            // Gera o resumo automático antes de deletar
+            await this.generatePostActionReport(channelId, channel.name, guild);
+
+            this.activeChannels.delete(channelId);
+            
+            const textChannel = guild.channels.cache.find(c => c.topic === `LinkedVoice:${channelId}`);
+            if (textChannel) await textChannel.delete(reason).catch(()=>{});
+            
+            await supabase.from('temp_channels').delete().eq('channel_id', channelId);
+            await channel.delete(reason);
+            logger.info(`Sala temporária ${channel.name} deletada: ${reason}`);
+            return true;
+        } catch (error) {
+            logger.error(`Erro ao deletar sala temporária ${channelId}: ${error.message}`);
+            throw error;
+        }
     }
 
     // Métodos para o Comando

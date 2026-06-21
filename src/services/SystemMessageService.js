@@ -802,8 +802,12 @@ export class SystemMessageService {
             logger.error(`[SystemMessageService] Falha crítica ao processar interação ${interaction.customId || 'N/A'}: ${error.message}`);
             logger.debug(`Stack Trace:\n${error.stack}`);
             
-            const replyMethod = interaction.deferred || interaction.replied ? 'editReply' : 'reply';
-            await interactionreplyMethod.catch(() => {});
+            try {
+                const replyMethod = interaction.deferred || interaction.replied ? 'editReply' : 'reply';
+                await interactionreplyMethod;
+            } catch (e) {
+                // Ignora se o Discord não deixar mais responder
+            }
         }
     }
 }
