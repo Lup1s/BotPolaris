@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, PermissionsBitField, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, PermissionsBitField, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } from 'discord.js';
 import { LevelingService } from './LevelingService.js';
 
 export class SystemMessageService {
@@ -133,7 +133,7 @@ export class SystemMessageService {
         const staffRole = guild.roles.cache.find(r => r.name.toLowerCase().includes('staff') || r.name.toLowerCase().includes('moderador') || r.name.toLowerCase().includes('mod'));
         const adminRole = guild.roles.cache.find(r => r.name.toLowerCase().includes('admin') || r.name.toLowerCase().includes('administrador'));
 
-        const keys = ['boas_vindas', 'regras', 'avisos', 'anuncios', 'noticias', 'comandos'];
+        const keys = ['boas_vindas', 'regras', 'avisos', 'anuncios', 'noticias', 'comandos', 'central'];
 
         for (const key of keys) {
             const channelId = this.config.channels[key];
@@ -192,11 +192,13 @@ export class SystemMessageService {
                 await channel.permissionOverwrites.set(overwrites, 'Reconfiguração automática de segurança do canal.');
                 logger.info(`Permissões do canal #${channel.name} (${key}) reconfiguradas.`);
 
-                // Garante que o painel de regras ou lista de comandos existam
+                // Garante que o painel de regras, lista de comandos ou central existam
                 if (key === 'regras') {
                     await this.ensureRulesMessage(channel);
                 } else if (key === 'comandos') {
                     await this.ensureCommandsListMessage(channel);
+                } else if (key === 'central') {
+                    await this.ensureCentralMessage(channel);
                 }
             } catch (err) {
                 logger.error(`Erro ao reconfigurar permissões do canal ${channelId} (${key}): ${err.message}`);
@@ -403,11 +405,21 @@ export class SystemMessageService {
             } catch (e) { /* Apagada */ }
         }
 
+        const bannerPath = path.resolve('src', 'assets', 'banner.png');
+        let files = [];
+        let imageUrl = 'https://i.imgur.com/8QG3mQ9.png'; // Fallback
+
+        if (fsSync.existsSync(bannerPath)) {
+            const attachment = new AttachmentBuilder(bannerPath, { name: 'banner.png' });
+            files.push(attachment);
+            imageUrl = 'attachment://banner.png';
+        }
+
         const embed = new EmbedBuilder()
             .setColor('#89b4fa')
             .setTitle('🎮 Painel do Jogador Polaris')
             .setDescription('Bem-vindo à Central! Acesse todas as funcionalidades da sua conta utilizando os botões abaixo.')
-            .setImage('https://i.imgur.com/8QG3mQ9.png'); // Substituir por um banner da sua comunidade
+            .setImage(imageUrl);
 
         const row1 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('central_perfil').setLabel('Meu Perfil').setStyle(ButtonStyle.Primary).setEmoji('👤'),
@@ -419,7 +431,7 @@ export class SystemMessageService {
             new ButtonBuilder().setCustomId('open_lfg_modal').setLabel('Procurar Squad').setStyle(ButtonStyle.Success).setEmoji('🎯')
         );
 
-        const msg = await channel.send({ embeds: [embed], components: [row1, row2] });
+        const msg = await channel.send({ embeds: [embed], components: [row1, row2], files });
         this.config.messages.central = msg.id;
         await this.saveDb();
     }
